@@ -1,0 +1,12 @@
+node_modules
+dist/
+build/
+keys/
+electron/mupdf/
+electron/engine.mjs
+installer/_setup-build/
+tests/out/
+__pycache__/
+*.pyc
+.rev-radar-export
+

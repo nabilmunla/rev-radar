@@ -1,0 +1,61 @@
+// Bridge between the interface and the PC.
+'use strict';
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+// engine ports: handed to the page (ports can't cross the bridge as arguments)
+ipcRenderer.on('engine:port', (e, info) => { window.postMessage({ type: 'engine-port', ...info }, '*', e.ports); });
+
+contextBridge.exposeInMainWorld('rr', {
+  /** engines asked for on the command line (tests), 0 = by the PC */
+  engines: Number((process.argv.find((a) => a.startsWith('--rr-engines=')) || '').split('=')[1]) || 0,
+  /** view engines asked for on the command line (tests: 1 = no second one), 0 = by the PC */
+  viewers: Number((process.argv.find((a) => a.startsWith('--rr-viewers=')) || '').split('=')[1]) || 0,
+  info: () => ipcRenderer.invoke('app:info'),
+  settings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  setTheme: (mode) => ipcRenderer.invoke('win:theme', mode),
+  setTitle: (t) => ipcRenderer.invoke('win:title', t),
+  list: (dir, recursive, kind) => ipcRenderer.invoke('fs:list', dir, recursive, kind),
+  stat: (paths) => ipcRenderer.invoke('fs:stat', paths),
+  hash: (p, quick) => ipcRenderer.invoke('fs:hash', p, quick),
+  openDialog: (opts) => ipcRenderer.invoke('dialog:open', opts),
+  saveDialog: (opts) => ipcRenderer.invoke('dialog:save', opts),
+  write: (p, data) => ipcRenderer.invoke('file:write', p, data),
+  openPath: (p) => ipcRenderer.invoke('shell:open', p),
+  showInFolder: (p) => ipcRenderer.invoke('shell:show', p),
+  tempPath: (name) => ipcRenderer.invoke('paths:temp', name),
+  docxConvert: (p) => ipcRenderer.invoke('docx:convert', p),
+  cacheGet: (k) => ipcRenderer.invoke('cache:get', k),
+  cachePreview: (k) => ipcRenderer.invoke('cache:preview', k),
+  cachePut: (k, json, thumb, preview) => ipcRenderer.invoke('cache:put', k, json, thumb, preview),
+  cacheClear: () => ipcRenderer.invoke('cache:clear'),
+  cacheSize: () => ipcRenderer.invoke('cache:size'),
+  enginesStart: (names) => ipcRenderer.invoke('engines:start', names),
+  engineKill: (name) => ipcRenderer.invoke('engines:kill', name),
+  enginePriority: (name, low) => ipcRenderer.invoke('engines:priority', name, !!low),
+  engineAdd: (name) => ipcRenderer.invoke('engines:add', name),
+  engineStop: (name) => ipcRenderer.invoke('engines:stop', name),
+  busy: (what) => ipcRenderer.invoke('app:busy', what),
+  pathOf: (file) => { try { return webUtils.getPathForFile(file); } catch (_) { return ''; } },
+  log: (line) => ipcRenderer.send('log', String(line)),
+  up: () => ipcRenderer.send('app:up'),
+  updateGet: () => ipcRenderer.invoke('update:get'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateCancel: () => ipcRenderer.invoke('update:cancel'),
+  updateLater: () => ipcRenderer.invoke('update:later'),
+  updateOpenPage: () => ipcRenderer.invoke('update:openPage'),
+  updateRestart: (what) => ipcRenderer.invoke('update:restart', what),
+  updateAfterStart: () => ipcRenderer.invoke('update:afterStart'),
+  updateShowSetup: () => ipcRenderer.invoke('update:showSetup'),
+  reportProblem: (text, extra) => ipcRenderer.invoke('report:problem', text, extra),
+  reportStatus: () => ipcRenderer.invoke('report:status'),
+  reportCrashSharing: (on) => ipcRenderer.invoke('report:crashSharing', on),
+  reportPreview: () => ipcRenderer.invoke('report:preview'),
+  reportOpenQueue: () => ipcRenderer.invoke('report:openQueue'),
+  reportCrash: (where, message, stack) => ipcRenderer.send('report:crash', String(where || ''), String(message || ''), String(stack || '')),
+  countGet: () => ipcRenderer.invoke('count:get'),
+  countSet: (on) => ipcRenderer.invoke('count:set', !!on),
+  onReports: (cb) => { const f = () => cb(); ipcRenderer.on('reports:state', f); return () => ipcRenderer.removeListener('reports:state', f); },
+  onUpdate: (cb) => { const f = (_e, st) => cb(st); ipcRenderer.on('update:state', f); return () => ipcRenderer.removeListener('update:state', f); },
+});

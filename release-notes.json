@@ -1,0 +1,166 @@
+{
+  "0.5.0": {
+    "New features": [
+      "Documents: \"PDF pages | Text as read\" - each paragraph whole, the words taken out struck on the old side and the words put in marked on the new; N / P, click and scroll-together work in both",
+      "Documents: tables in a specification are read row by row and cell by cell - a changed cell shows as that cell, not as a paragraph removed and another added",
+      "Documents and BOQ: pictures inside the pages are compared - a changed photo, colour swatch or table pasted as a picture is listed and boxed on both sides",
+      "Pictures: a logo on every page is left out (a note says so); the words inside a picture are not read - check it by eye; a figure drawn with lines on a text page is compared by its words",
+      "All three tabs: chips All / Figures / To review steer N / P; \"Same change in N other places\" with \"Tick all\" (Shift + R); Figures and Group columns in Details and the Excel registers",
+      "Documents: the strip shows where the change is (the headings above it), the figures old → new, and the whole change",
+      "Drawings: a legend says what each colour on the sheet means",
+      "Help › Report a problem: write what went wrong and press Send - made anonymous first: no names, folders, paths or files leave the PC",
+      "The user count: once a day a random number, the version and Windows - nothing else. It asks first; Settings › Privacy turns it off",
+      "Updates come from the Rev Radar page on GitHub, signed: a package that is not exactly what was published is refused"
+    ],
+    "Fixes": [
+      "Documents: a sign, a comparator or a percent that changed (+5 → -5, ≥ → >, 50% → 50) is a change, boxed on the page - it was shown as \"punctuation only\"; BOQ: the changed sign is boxed too",
+      "Documents: a date that changed and nothing else is listed (light, \"Date / revision only\") - it was left out",
+      "Documents: a number alone on its line, a form's fill-in line (\"Manufacturer: ......\") and a clause right after a section's own contents list are read - they were left out",
+      "Documents: a catalogue with a different product photo in the same frame on every page - the photos are compared, not taken for a logo",
+      "Big PDFs in BOQ and Documents are read as needed: four 400 MB files open at once take about 180 MB of memory, not 2.2 GB; checking a 400 MB drawing file takes about 100 MB, not 1 GB",
+      "Drawings: very heavy sheets (millions of lines) are merged in a stream - peak memory 2.3 GB → 0.85 GB",
+      "Reading the text of a PDF is faster (a 3,000-page specification: 20 s → 12 s a side); after scanned pages are read by OCR, the other pages are not read a second time",
+      "A broken or odd file (a stray character in a drawing, a file that is not a PDF in the folder) no longer stalls an engine or fills the memory"
+    ]
+  },
+  "0.4.5": {
+    "New features": [
+      "Documents: side by side - the old and new issues' own pages, each paragraph changed marked and the words taken out / put in boxed on the page; click a change on either side and the other side goes to it; scroll and the other side follows (a Word file shows its paragraphs as rows)",
+      "Documents: the same legend and \"Minor changes\" switch as the BOQ - moved, number only (renumbered) and punctuation only are drawn light and can be hidden"
+    ],
+    "Fixes": [
+      "BOQ: \"Heading reworded\" is a normal change again, not a minor one - the heading says what the item is (3mm aluminium sheet or 1 inch steel plate)",
+      "Drawings: \"+6 more\" under a change's texts opens the rest of them (\"Show fewer\" closes them)",
+      "Documents: one spec against one is paired whatever the file names (a date such as \"_06042026\" was read as a section number - a spec reissued from DD to TD showed as one section removed and one added)",
+      "Documents: \"C.4\"-style clause numbers are numbers - a renumbered appendix clause is no longer a change of its text",
+      "Side by side: pages fit the pane by the usual page width (a few A3 pages scroll sideways instead of shrinking every page)"
+    ]
+  },
+  "0.4.4": {
+    "New features": [
+      "BOQ side by side: a legend says what each colour means; minor changes (moved, letter only, heading above reworded - the item's own line the same) are drawn light and can be hidden with \"Minor changes\"",
+      "BOQ: a reworded heading is boxed on the page itself and its changed words are shown under the two sides"
+    ],
+    "Fixes": [
+      "BOQ PDFs laid out as \"ITEM / NO.\" over \"ITEM DESCRIPTION\": descriptions were read into the item column - doors, gym equipment and \"3mm\" / \"2 layer\" items showed false changes",
+      "BOQ PDFs: \"(CONT'D.)\" headings, page references (\"Sec J/Page 10/R4\") and bill summary pages no longer read as changes or items; a bill's title under the header starts its bill",
+      "BOQ: a sub-heading after a page break (\"Common Area\") is no longer read under a heading of that name from another section",
+      "BOQ side by side: scrolling keeps the two sides level across page breaks (page headers and footers count less), and to the ends of both issues",
+      "BOQ: \"Check\" marks only doubtful pairings and items read from scans - not every item of a PDF"
+    ]
+  },
+  "0.4.3": {
+    "New features": [
+      "BOQ: side by side shows a PDF BOQ as its own pages, the changes marked on them (the changed cells boxed) - click a change on either side and the other side goes to it, even in another file; scroll and the other side follows",
+      "BOQ: \"Table as read\" shows the PDF's table as it was read (what was compared); zoom on PDF pages (- / +, Ctrl + wheel)",
+      "BOQ: scrolling follows the bill in view - a PDF of every bill against a workbook of a sheet per bill keeps to the same bill; picking a sheet's tab takes the PDF to that bill's pages"
+    ]
+  },
+  "0.4.2": {
+    "New features": [
+      "BOQ: side by side - the old and new sheets as laid out, the changes coloured in them; click a change on either side and the other side goes to it, even in another sheet; scroll and the other side follows on the matching sheet",
+      "BOQ: a tab per sheet with its count of changes, a change map beside each scrollbar, and the change in short (word by word) under the sheets",
+      "BOQ: Details keeps the field-by-field view; \"New issue is changed pages only\" is on the bar in side by side"
+    ]
+  },
+  "0.4.1": {
+    "New features": [
+      "Scanned PDFs (no text layer) are now read by OCR in the BOQ and Documents tabs; what comes from a scan is marked \"check\"",
+      "Your ticks on BOQ and Documents changes are kept: compare the same files again and they are still ticked (a file issued again drops them)"
+    ],
+    "Fixed": [
+      "BOQ: bills in a set are matched bill by bill (\"_Bill-2\" was not read as Bill 2 - Tower 1's items could be paired with Tower 2's)",
+      "BOQ: a bill renumbered in the new issue (\"Bill-01\" for \"Bill-2\") is matched by what is in it",
+      "BOQ: look-alike items keep their own Ref / Type (fan coil units, doors) instead of being swapped",
+      "BOQ: a short description (\"Upstand walls\") is no longer paired across a unit change with another tower's item",
+      "BOQ: the bill's title repeated at the top of each page is no longer read as a section; \"(Cont'd)\" headings no longer add text",
+      "BOQ from PDF: much better reading - a sheet per bill, covers and summaries left out, wrapped descriptions and centred quantities read with their item",
+      "Documents: a word broken at its hyphen in a PDF keeps the hyphen",
+      "A file with no BOQ table (a sign schedule) now says so instead of \"nothing changed\"",
+      "BOQ: \"Sr. No. | Item No. | Description\" sheets read the item number, not the serial number",
+      "BOQ from PDF: a column heading over two lines (\"AMOUNT\" / \"AED\"), \"Unit Rate\" headings and \"PTC 2\" footers read right; page numbers are the PDF's own"
+    ]
+  },
+  "0.4.0": {
+    "New features": [
+      "BOQ tab: compare two issues of a bill of quantities (Excel or PDF, or folders of bills) - every item paired wherever it went",
+      "BOQ: quantities, units, descriptions, rates changed, items added, removed or moved; renumbering and rounding shown apart",
+      "BOQ: \"New issue is changed pages only\" for addenda that re-issue only the pages that changed",
+      "Documents tab: compare two issues of specifications or other documents (PDF or Word, books or folders of sections)",
+      "Documents: spec sections paired by number, paragraphs by text - headers, footers, page numbers and dates left out",
+      "Both tabs: the same review as the drawings (N, P, R), and an Excel change register"
+    ]
+  },
+  "0.3.4": {
+    "Fixed": [
+      "Opening the next sheet quickly could show the sheet before under the new sheet's change boxes",
+      "After \"Again\" on a sheet issued again under the same name, zooming in showed the old drawing (or nothing)",
+      "After \"Again\", a sheet with more changes could stay ticked off, and N could skip its new changes",
+      "\"Try again\" on a sheet that could not be read left it blank; a sheet that can't be opened now says so, with Try again",
+      "The Fade slider works over its whole range, and the whole sheet has the same greys as the zoomed-in view",
+      "Highlight tints only the paper: unchanged lines keep their grey",
+      "Sheet titles in Arabic and other scripts are kept (list, search, Excel, PDF)",
+      "Monster sheets: a lost or failed merge is redone instead of being remembered as nothing to merge",
+      "Updates: a double click on Update, or changing the updates folder during a check, no longer fails the update; after Go back, an accepted update starts as promised",
+      "Clouded PDF: a stretched part has an orange dashed outline, as in the viewer, not a red cloud",
+      "Smaller fixes: same-named files on both sides are told apart in the header; folders deeper than 12 levels are read; setup keeps your own file if the new version brings one with the same name"
+    ]
+  },
+  "0.3.3": {
+    "New features": [
+      "Highlight (toolbar button or H): a faint yellow fill in the change boxes, and a yellow dot on changes too small to see - easier on a poor screen or weaker eyes. Lines keep their colour"
+    ],
+    "Faster": [
+      "The next sheet is made ready while you look at the current one: going on with N or R, it opens sharp, zoomed on its first change",
+      "Blended CAD sheets: the next change shows in about 1-3 s instead of up to 13 s on sheets reached with N or R; panning no longer redraws",
+      "Zooming quickly with the wheel draws only the last zoom, not every step in between",
+      "Comparing in the background no longer slows down the sheet on screen",
+      "Moving the Fade slider no longer redraws whole sheets",
+      "Sheets with a moved view draw about twice as fast"
+    ]
+  },
+  "0.3.2": {
+    "New features": [
+      "A plan moved a few mm on the sheet (up to 20 mm) is lined up on its own: listed as \"Moved 1.9 mm down\" with a dashed outline (also in the clouded PDF), and only its real changes are listed; a sheet where nothing else changed says \"Moved only\" (level plans moved a little on the sheet)",
+      "Part of a drawing that moved because the drawing was stretched (a floor made taller, a bay made wider) is listed as \"Stretched 3.0 mm up\", with the seam marked - the sheet stays Changed",
+      "Sheets pair by name with a leading zero, a project prefix or an issue date added or dropped (\"100101\" / \"F111.1-...-100101\", \"GA-L04\" / \"F111.1-AE7-DWG-AR-GA-L04\")"
+    ],
+    "Fixes": [
+      "Sheet numbers are shown as written (\"F111.1-AE7-...\"), without the revision code or the file name repeated as the title",
+      "A level code like \"R1\" is not taken for a revision (\"...-R1\" and \"...-R2\" are two sheets); \"unpair\" is remembered after a pair made by hand",
+      "Old / New / Side by side show the sheets as issued, with the boxes where the drawing is",
+      "A sheet whose old issue is a scan no longer lists every word as added",
+      "A quarter-turned sheet no longer says it was moved 594 mm",
+      "Blended CAD sheets: a cause of the engine stopping at random removed",
+      "Remembered comparisons, ticks and hand-made pairs can no longer be wiped when another program holds the settings file for a moment",
+      "Save errors say what happened (file open in Excel, folder gone, disk full)"
+    ]
+  },
+  "0.3.1": {
+    "Fixes": [
+      "Sheets that never finished (CAD sheets drawn with a page-wide blend mode, e.g. some tower floor plans) are compared in under a minute and shown in the viewer",
+      "A sheet that could not be compared opens side by side",
+      "The progress line says when sheets take long instead of \"about a minute left\""
+    ]
+  },
+  "0.3.0": {
+    "New features": [
+      "Setup: installs for everyone on the PC (or just you), Start menu shortcut, uninstall from Windows",
+      "Updates itself from the company updates folder - asks first, no helper program for the antivirus to block",
+      "Go back to the previous version from Settings"
+    ],
+    "General polishing": [
+      "Overview of all sheets first; Start review / Enter; N ticks a sheet off once all its changes were seen",
+      "Tiny changes come last on a sheet, after one stop that says so",
+      "Removed and unreadable sheets are part of the review",
+      "Mini-map when zoomed in; your zoom is kept from change to change",
+      "Excel: title block changes, where each change is, why a sheet could not be compared"
+    ],
+    "Fixes": [
+      "A sheet re-issued under the same file name loses its tick (and says so)",
+      "A stopped comparison no longer reads as all reviewed",
+      "Fast typing in the sheet search lost letters",
+      "PDF summary page columns overlapped"
+    ]
+  }
+}
