@@ -11,7 +11,8 @@ Free for anyone to use. Windows 10 / 11, 64-bit.
 
 Get **Rev-Radar-Setup-&lt;version&gt;.exe** from the [Releases](https://github.com/nabilmunla/rev-radar/releases)
 page and run it. It installs for everyone on the PC (asks for admin rights once) or just for you.
-Once installed, Rev Radar tells you when a new version is out (see Updates).
+Windows may say "Windows protected your PC" (the setup has no paid certificate): press More info, then
+Run anyway. Once installed, Rev Radar tells you when a new version is out (see Updates).
 
 ## The three tabs
 
@@ -65,9 +66,11 @@ for new versions here, the only things it can send are:
 - **a problem report**, only when you write one and press Send (Settings > Help > Report a problem).
 - **crash reports**, only if you turn them on in Settings > Help.
 
-Reports are made anonymous before they leave: no user or PC name, no file names, folders or paths,
-never a file. Reports and the count go to the developer's own small receiver (hosted on
-Cloudflare), not to any analytics or crash-reporting company. A copy built from source names no
+Reports are made anonymous before they leave: your user name, the PC's name, file names, folders and
+paths are taken out of the error and the app's log; never a file. What you type goes as you typed it,
+so don't name a project in it. Reports and the count go to the developer's own small receiver (hosted
+on Cloudflare), not to any analytics or crash-reporting company. Like any web host, Cloudflare and
+GitHub see your internet address. A copy built from source names no
 receiver and sends none of them.
 
 ## Building from source

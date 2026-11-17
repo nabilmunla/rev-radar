@@ -8,8 +8,8 @@
       "All three tabs: chips All / Figures / To review steer N / P; \"Same change in N other places\" with \"Tick all\" (Shift + R); Figures and Group columns in Details and the Excel registers",
       "Documents: the strip shows where the change is (the headings above it), the figures old → new, and the whole change",
       "Drawings: a legend says what each colour on the sheet means",
-      "Help › Report a problem: write what went wrong and press Send - made anonymous first: no names, folders, paths or files leave the PC",
-      "The user count: once a day a random number, the version and Windows - nothing else. It asks first; Settings › Privacy turns it off",
+      "Settings › Help › Report a problem: write what went wrong and press Send - sent anonymously: your user and PC names, file names, folders and paths are taken out of the log; never a file",
+      "The user count: once a day a random number, the version and Windows or Linux - nothing else. It asks first; Settings › Privacy turns it off",
       "Updates come from the Rev Radar page on GitHub, signed: a package that is not exactly what was published is refused"
     ],
     "Fixes": [
