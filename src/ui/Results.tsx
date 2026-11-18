@@ -633,7 +633,7 @@ function SheetPanel({ pair, onReviewed, onStart }: { pair: Pair | null; onReview
         {pair.old && pair.neu && base(pair.old.rel) === base(pair.neu.rel) && pair.old.pages === pair.neu.pages && pair.old.page === pair.neu.page
           ? <FileLine label="File" f={pair.neu} both={pair.old} one />
           : <><FileLine label="Old" f={pair.old} /><FileLine label="New" f={pair.neu} /></>}
-        {pair.old && pair.neu && <div className="faint pairedby">Paired by {({ name: 'file name', number: 'drawing number', content: 'what the sheets say', order: 'page order', hand: 'hand', none: '' })[pair.how]}{pair.score ? ` (${Math.round(pair.score * 100)}% alike)` : ''}
+        {pair.old && pair.neu && <div className="faint pairedby">Paired by {({ name: 'file name', number: 'drawing number', sheet: 'the number on the sheet', content: 'what the sheets say', order: 'page order', hand: 'hand', none: '' })[pair.how]}{pair.score ? ` (${Math.round(pair.score * 100)}% alike)` : ''}
           {' · '}<button className="linkbtn" onClick={() => { if (unpairAsk === pair.id) { setUnpairAsk(''); unpair(pair); } else { setUnpairAsk(pair.id); setTimeout(() => setUnpairAsk(''), 4000); } }} title="Not the same sheet? Split into a removed and a new sheet; then pair each by hand">{unpairAsk === pair.id ? 'click again to unpair' : 'unpair'}</button></div>}
       </div>
       {(!pair.old || !pair.neu) && <PairWith pair={pair} />}

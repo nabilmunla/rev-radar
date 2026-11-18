@@ -6,7 +6,7 @@ import { App } from './App';
 import { rr } from './api';
 import { ui, bump, realAreas, stepAreas, tinyFrom, textGroups, hasFigures, isFigText, needsReview } from './model';
 import { readSet, sideLabels, startSession } from './runner';
-import { startBoq, exportBoqExcel, leaveBoq, visible, boqGroups, isFigure } from './boqrun';
+import { startBoq, exportBoqExcel, leaveBoq, visible, boqGroups, isFigure, itemCount } from './boqrun';
 import { startDocs, exportDocsExcel, leaveDocs, docVisible, docGroups } from './docsrun';
 import { exportExcel, exportPdf } from './exporting';
 
@@ -68,7 +68,7 @@ createRoot(document.getElementById('root')!).render(<Guard><App /></Guard>);
     const cur = b.sel >= 0 ? b.entries[b.sel] : null;
     return { phase: b.phase, error: b.error, entries: b.entries.length, selIdx: b.sel, filter: b.filter, sel: cur ? { kind: cur.kind, ref: (cur.n ?? cur.o)?.ref, text: (cur.n ?? cur.o)?.text, fig: isFigure(cur), tk: b.ticked.has(cur.k), grp: cur.rep ?? -1 } : null, ticked: b.ticked.size,
       items: b.result ? [b.result.old.items.length, b.result.neu.items.length] : null, added: b.result?.added.length, removed: b.result?.removed.length, outside: b.result?.outside.length,
-      chip: b.chip, todo: b.entries.filter((e) => e.kind !== 'renumbered' && !b.ticked.has(e.k)).length, visible: b.phase === 'done' ? visible(b).length : 0, figs: b.entries.filter(isFigure).length, groups: b.phase === 'done' ? [...boqGroups(b.entries).values()].map((g) => g.length) : [], note: b.note, notes: b.result ? [...b.result.old.notes, ...b.result.neu.notes] : null, same: b.result?.pairs.filter((p) => !p.changed.length && !p.moved).length, ocr: b.result ? b.result.neu.items.filter((x) => x.ocr).length : null };
+      chip: b.chip, todo: b.entries.filter((e) => e.kind !== 'renumbered' && !b.ticked.has(e.k)).reduce((n, e) => n + itemCount(e), 0), visible: b.phase === 'done' ? visible(b).length : 0, figs: b.entries.filter(isFigure).length, groups: b.phase === 'done' ? [...boqGroups(b.entries).values()].map((g) => g.length) : [], note: b.note, notes: b.result ? [...b.result.old.notes, ...b.result.neu.notes] : null, same: b.result?.pairs.filter((p) => !p.changed.length && !p.moved).length, ocr: b.result ? b.result.neu.items.filter((x) => x.ocr).length : null };
   },
   /** (T8 tests) put the selection on the first member of the first group that has none ticked (any group when `any`), or of the nth; returns the group's size */
   pickGroup(tab: 'boq' | 'docs', nth = 0, any = false) {

@@ -5,7 +5,9 @@ import { rr, type FileItem, type Kind } from './api';
 import { workers, viewer } from './engines';
 import { fileArg, READ_FAIL, type EngineClient } from '../engine/rpc';
 import { pairByNames, pairByContent, sheetKeyOf, cleanTitle, type SheetRef, type PairPlan, type Fingerprint } from './pairing';
-import { classifyAreas } from './titleblock';
+import { classifyAreas, sizeKey } from './titleblock';
+import { pairBySheetNo, type ReadPage } from './sheetpair';
+import type { PageToks } from './sheets';
 import { ui, bump, toast, sizeGroup, realAreas, refKey, reviewKey, needsReview, type Pair, type Session, type SetInfo, type ResultR, type Zone, type Manual } from './model';
 
 /** a sheet still not compared after this long is stopped */
@@ -161,7 +163,7 @@ export async function startSession(oldSet: SetInfo, newSet: SetInfo, keep?: { zo
 /** what to do about a file that can't be read */
 const ASK_AGAIN = 'Ask for this file to be issued again (or check whether it opens in a PDF reader).';
 
-function planToPair(p: PairPlan, i: number): Pair {
+export function planToPair(p: PairPlan, i: number): Pair {
   // named after the new issue's file - unless that is one combined PDF of many sheets and the old
   // sheet has a file of its own (its name says which drawing it is)
   const ref = p.neu && !(p.neu.pages > 1 && p.old && p.old.pages === 1) ? p.neu : p.old || p.neu!;
@@ -175,6 +177,8 @@ function planToPair(p: PairPlan, i: number): Pair {
   if (!title || title === base) title = ref.pages > 1 ? `page ${ref.page + 1} of ${base}` : (title === key ? '' : title);
   // (not a revision mark, copy number or date left over from the name: "(1)", "2026-10-28", "RevB")
   if (ref.pages <= 1) title = cleanTitle(title);
+  // (the number and title read off the sheet - T11; no title read: the one from the file name stays - sweep)
+  if (ref.read?.no && ref.read.title) title = ref.read.title;
   return {
     id: 'p' + i + '-' + Math.random().toString(36).slice(2, 7),
     old: p.old, neu: p.neu, how: p.how, score: p.score,
@@ -190,20 +194,39 @@ async function pairAll(olds: SheetRef[], news: SheetRef[], s: Session, live: () 
   const plans: PairPlan[] = [...byName.pairs];
   let lo = byName.olds, ln = byName.news;
   if (lo.length && ln.length) {
-    // the rest by what the sheets say
-    const want = [...lo.map((r) => ({ r, side: 0 })), ...ln.map((r) => ({ r, side: 1 }))];
+    // the rest by what the sheets say - and the number in their title block (T11). Single files left
+    // over are read with up to 8 name-paired files of their size as witnesses (sides 2 / 3): their
+    // read numbers must agree with their names before a renamed file is paired by its number.
+    const witnesses = (left: SheetRef[], paired: SheetRef[]) => {
+      const sizes = new Set(left.filter((r) => r.pages === 1 && r.w > 0).map((r) => sizeKey(r)));
+      const out: SheetRef[] = [];
+      for (const k of sizes) out.push(...paired.filter((r) => r.pages === 1 && !r.bad && sizeKey(r) === k).slice(0, 8));
+      return out;
+    };
+    const witO = witnesses(lo, byName.pairs.map((p) => p.old!).filter(Boolean)), witN = witnesses(ln, byName.pairs.map((p) => p.neu!).filter(Boolean));
+    const want = [...lo.map((r) => ({ r, side: 0 })), ...ln.map((r) => ({ r, side: 1 })), ...witO.map((r) => ({ r, side: 2 })), ...witN.map((r) => ({ r, side: 3 }))];
     const byFile = new Map<string, { r: SheetRef; side: number }[]>();
     for (const w of want) { const k = w.r.file; if (!byFile.has(k)) byFile.set(k, []); byFile.get(k)!.push(w); }
     const groups = [...byFile.values()];
     let done = 0;
     const fps = await spread(groups, async (c, g) => {
-      const res = await again1(() => c.call<{ page: number; words: string[] }[]>('fingerprint', [fileArg(g[0].r.file), g.map((x) => x.r.page)])).catch(() => g.map((x) => ({ page: x.r.page, words: [] as string[] })));
+      const res = await again1(() => c.call<{ page: number; words: string[]; toks?: PageToks }[]>('fingerprint', [fileArg(g[0].r.file), g.map((x) => x.r.page)])).catch(() => g.map((x) => ({ page: x.r.page, words: [] as string[], toks: undefined })));
       s.note = `Reading what the sheets say: ${(done += g.length)} of ${want.length}`; bump();
-      return g.map((x, i) => ({ side: x.side, fp: { ref: x.r, words: res[i]?.words || [] } as Fingerprint }));
+      return g.map((x, i) => ({ side: x.side, toks: res[i]?.toks, fp: { ref: x.r, words: res[i]?.words || [] } as Fingerprint }));
     }, undefined, live);
     if (!live()) return [];
     const flat = fps.flat();
-    const byContent = pairByContent(flat.filter((x) => x.side === 0).map((x) => x.fp), flat.filter((x) => x.side === 1).map((x) => x.fp));
+    const side = (k: number) => flat.filter((x) => x.side === k);
+    const rp = (k: number): ReadPage[] => side(k).map((x) => ({ ref: x.fp.ref, toks: x.toks }));
+    const fo = side(0), fn = side(1);
+    let bySheet: [number, number][] = [];
+    try {
+      const sp = pairBySheetNo(rp(0), rp(1), rp(2), rp(3));
+      for (const [r, nm] of sp.names) r.read = nm;
+      const io = new Map(fo.map((x, i) => [x.fp.ref, i] as const)), jn = new Map(fn.map((x, j) => [x.fp.ref, j] as const));
+      bySheet = sp.pairs.map(([a, b]) => [io.get(a)!, jn.get(b)!] as [number, number]).filter(([i, j]) => i != null && j != null);
+    } catch { /* (a reading fault leaves today's pairing as it was) */ }
+    const byContent = pairByContent(fo.map((x) => x.fp), fn.map((x) => x.fp), 0.35, bySheet);
     plans.push(...byContent.pairs);
     lo = byContent.olds; ln = byContent.news;
   }

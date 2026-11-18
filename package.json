@@ -1,6 +1,6 @@
 {
   "name": "rev-radar",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Rev Radar - compares two issues of drawings, BOQs and specifications and shows what really changed",
   "main": "electron/boot.cjs",
   "scripts": {

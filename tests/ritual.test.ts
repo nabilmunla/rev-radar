@@ -169,6 +169,25 @@ test('a section\'s own contents line is not glued to the clause under it: the li
   assert.ok(!t.some((x) => /DEMONSTRATION|CLEANING|PROTECTION/.test(x)), t.join(' | '));
 });
 
+test('a clause whose last line is a standard in capitals ("ASTM D412.") after a comma keeps it; a heading after a full stop stays a heading', () => {
+  // (STR old p.132: "... 15.5 MPa," / "ASTM D412." - the last line read as a heading, the clause shown "Changed" against the
+  //  new issue where it broke after "ASTM"; T17's truth check found it)
+  const line = (t: string, y: number) => { let x = 60; return t.split(' ').map((w) => { const o = { s: w, x0: x, y0: y, x1: x + w.length * 5, y1: y + 10 }; x += w.length * 5 + 4; return o; }); };
+  const body = ['1. Elastomeric Pads: AASHTO M 251, plain, vulcanized, 100 percent polychloroprene', '(neoprene) elastomer, molded to size or cut from a molded sheet, 50 to 70 Shore,',
+    'Type A durometer hardness, ASTM D2240; minimum tensile strength 15.5 MPa,', 'ASTM D412.', '2. Bearing strips: high-density plastic strips, 3 mm thick, of the width of the plank seat.', 'FABRICATION'];
+  const ws = body.flatMap((t, k) => line(t, 120 + k * 12));
+  const t = pdfParas('s.pdf', 1, () => ws, () => 842).map((p) => p.text);
+  assert.ok(t.some((x) => x.endsWith('15.5 MPa, ASTM D412.')), t.join(' | '));
+  assert.ok(!t.includes('ASTM D412.'), t.join(' | '));
+  assert.ok(t.includes('FABRICATION'), 'the heading after a full stop: ' + t.join(' | '));
+  // (the generated Word pair as LibreOffice prints it: "... qualified as acceptable according to" / "ASTM C 795." - T16b)
+  const b2 = ['D. Insulation materials for use on austenitic stainless steel shall be qualified as acceptable according to', 'ASTM C 795.', 'E. Foam insulation materials shall not use CFC or HCFC blowing agents in the manufacturing process.',
+    'Provide the insulation in the thicknesses scheduled, with all joints sealed, all as shown on the Drawings', 'PART 3 - EXECUTION', 'A LONG NOTE IN CAPITALS THAT RUNS ACROSS THE WHOLE WIDTH OF THE PAGE AND ENDS IN A WORD', 'ALL WORK'];
+  const t2 = pdfParas('s.pdf', 1, () => b2.flatMap((x, k) => line(x, 120 + k * 12)), () => 842).map((p) => p.text);
+  assert.ok(t2.some((x) => x.endsWith('according to ASTM C 795.')), t2.join(' | '));
+  assert.ok(t2.includes('EXECUTION') && t2.includes('ALL WORK'), 'headings stay headings: ' + t2.join(' | '));
+});
+
 test('a scanned contents page with one page number misread by OCR ("11" read "1") is still a contents page', () => {
   const line = (t: string, y: number) => { let x = 60; return t.split(' ').map((w) => { const o = { s: w, x0: x, y0: y, x1: x + w.length * 6, y1: y + 10 }; x += w.length * 6 + 5; return o; }); };
   const ls = ['TABLE OF CONTENTS', 'PERFORMANCE REQUIREMENTS 3', 'DELIVERY STORAGE AND HANDLING 4', 'MINERAL-FIBER INSULATION APPLICATION 9', 'FLEXIBLE ELASTOMERIC INSULATION APPLICATION 10', 'FIRE-RATED INSULATION SYSTEM INSTALLATION 1', 'CONCEALED INDOOR DUCT APPLICATION SCHEDULE 12', 'OUTDOOR DUCT AND PLENUM APPLICATION SCHEDULE 13'];

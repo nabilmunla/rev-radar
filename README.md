@@ -20,7 +20,7 @@ Run anyway. Once installed, Rev Radar tells you when a new version is out (see U
 
 Drop the old issue (a folder of PDFs, a few PDFs or one combined PDF) on the left and the new issue
 on the right. Every sheet is paired with the same sheet of the other issue - by the drawing number in its
-file name, or by the words on the sheet - and compared. You see at once which sheets changed and where: each change is boxed
+file name or in its title block, or by the words on the sheet - and compared. You see at once which sheets changed and where: each change is boxed
 and numbered, removed lines in red, added in blue. Press **N** to go from change to change; a sheet
 is ticked off once you have seen all of it. Export a clouded PDF of the changed sheets, or an Excel
 list of every sheet.
@@ -39,7 +39,9 @@ and the other side goes to it. Export the change register to Excel.
 ### Documents
 
 Drop two issues of a specification or any other document (PDF or Word). Paragraphs are paired
-clause by clause; the words taken out and put in are marked on the pages themselves. Minor changes
+clause by clause; the words taken out and put in are marked on the pages themselves. A Word file is
+compared as pages, as Word prints it: Microsoft Word or LibreOffice on the PC makes the pages (a few
+seconds a file). If neither can, its text is compared, and the app says which. Minor changes
 (renumbering, punctuation, a date) are told apart and can be hidden. Scanned pages are read with
 OCR. Pictures inside the pages are compared as pictures; the words inside a picture are not read.
 

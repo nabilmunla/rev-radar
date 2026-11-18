@@ -1,4 +1,16 @@
 {
+  "0.5.1": {
+    "New features": [
+      "Drawings: sheets are also paired and listed by the drawing number in the title block, if only one sheet per issue has it - for a combined PDF with pages reordered or a file renamed without its number",
+      "Documents: a Word file is compared as pages, as Word prints it. Microsoft Word on the PC makes the pages, or LibreOffice (a few seconds a file); if not, its text is compared. The app says which"
+    ],
+    "Fixes": [
+      "Documents: a paragraph repeated in several places (the same line under every schedule) is marked \"Moved\" only when it really moved - a whole copy of a section was shown as moved",
+      "Documents: a clause whose last line is a standard in capitals (\"... tested to\" / \"ASTM D412.\") is read whole - it was shown as changed, with the last line as removed",
+      "Documents and BOQ: in a table pasted as a picture with a grey or cream background, a changed digit is found, as on a white background - it was missed",
+      "BOQ: everything counts in items - the Changes chip, To review, the summary and the register agree; \"Renumbered only\" counts items that were only renumbered (an item changed and renumbered is a change)"
+    ]
+  },
   "0.5.0": {
     "New features": [
       "Documents: \"PDF pages | Text as read\" - each paragraph whole, the words taken out struck on the old side and the words put in marked on the new; N / P, click and scroll-together work in both",

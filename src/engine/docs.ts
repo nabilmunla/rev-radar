@@ -33,6 +33,8 @@ export interface Para {
 const CLAUSE = /^((?:PART|SECTION|ARTICLE|CLAUSE)\s+[\dA-Z]+(?:\.\d+)*\s*[-–:.]?|[A-Z]\.\d+(?:\.\d+)*\.?(?=\s)|(?!0\.)\d+(?:\.\d+)+\.?(?!\s*(?:mm|m|cm|m2|m3|kg|g|t|kn|mpa|kpa|pa|bar|%|°|deg|w|kw|kva|v|a|l|l\/s|hz|db|nos?|nr|inch|in|ft)\b)|\d+\.(?=\s)|\d+\)|\(?[a-zA-Z]\)|[A-Za-z]\.(?=\s)|\([ivx]+\)|[ivx]+\.(?=\s))\s*/;
 /** a heading: upper case, or a numbered title line ("1.2 REFERENCES") */
 const isHead = (t: string) => { const l = t.replace(/[^A-Za-z]/g, ''); return l.length >= 3 && t.length <= 90 && l.replace(/[^A-Z]/g, '').length >= l.length * 0.8; };
+/** a line stopping on a small word goes on: "... requirements for" (DECISIONS 86) */
+const SMALL_END = /\b(to|for|of|in|by|with|and|or|the|a|an|per|as|at|from|on|than|under|into|including|between)$/;
 const PAGE_NO = /^(page\s*)?\d{1,4}(\s*(of|\/)\s*\d{1,4})?$|^-\s*\d{1,4}\s*-$|^\d{1,4}\s*$/i;
 /** a contents line: dot leaders ending in its page number ("1.1 RELATED DOCUMENTS ........ 3") - left out, and nothing
  *  is joined onto it (a section's own contents list ran into its first clause, which was then lost with it) */
@@ -386,7 +388,12 @@ export function pdfParas(file: string, pageCount: number, pageWords: (i: number)
       if (l.row) { flush(); const { wb, ...row } = l.row; raw.push({ t: row.cells.join(' | '), page: p, wb, row }); continue; }
       const startsClause = !!CLAUSE.exec(l.t)?.[0].trim();
       // (the same paragraph: close under the line before, no clause number, the line before full)
-      if (cur && !startsClause && !LEADERS_END.test(cur.t) && (cur.page === p ? l.y0 - cur.y1 < cur.h * 0.9 : true) && (cur.lastLen > width * 0.6 || /^[a-z(]/.test(l.t)) && !isHead(l.t)) {
+      // (a line in capitals is a heading - unless it ends the clause before: that one stops mid-sentence and this one
+      //  ends in a full stop or holds a figure ("... 15.5 MPa," / "ASTM D412.", "... according to" / "ASTM C 795."), or
+      //  that one stops on a small word on the same page ("... requirements for" / "VOC"); "... insulation material" /
+      //  "QUALITY ASSURANCE" stays a heading - DECISIONS 86, Engineer B3)
+      const endsClause = (h: string) => /[,;a-z]$/.test(cur!.t) && (/\.["'”’)\]]*$/.test(h) || /\d/.test(h)) || (cur!.page === p && SMALL_END.test(cur!.t));
+      if (cur && !startsClause && !LEADERS_END.test(cur.t) && (cur.page === p ? l.y0 - cur.y1 < cur.h * 0.9 : true) && (cur.lastLen > width * 0.6 || /^[a-z(]/.test(l.t)) && (!isHead(l.t) || endsClause(l.t))) {
         // (a word broken at its hyphen - "pressure-" / "sensitive" - is one word, its hyphen kept)
         const join = /[a-z]-$/.test(cur.t) && /^[a-z]/.test(l.t);
         cur.t = join ? cur.t + l.t : cur.t + ' ' + l.t;
@@ -449,14 +456,14 @@ export function compareParas(O: Para[], N: Para[]): DocDiff {
     for (const [x, os] of mO) { const ns = mN.get(x); if (ns && ns.length === os.length && (os.length === 1 || tO[os[0]].n >= 8)) os.forEach((o, j) => put(o, ns[j])); }
   };
   /** the paragraphs not yet paired between those paired in order, gap by gap */
-  const gaps = (fn: (os: number[], ns: number[]) => void) => {
+  const gaps = (fn: (os: number[], ns: number[]) => void, oneSided = false) => {
     const anchors = inOrder(O.map((_, o) => o).filter((o) => oTo[o] >= 0), (o) => oTo[o]);
     const bounds = [[-1, -1], ...anchors.map((o) => [o, oTo[o]]), [O.length, N.length]];
     for (let g = 0; g + 1 < bounds.length; g++) {
       const os: number[] = [], ns: number[] = [];
       for (let o = bounds[g][0] + 1; o < bounds[g + 1][0]; o++) if (oTo[o] < 0) os.push(o);
       for (let n = bounds[g][1] + 1; n < bounds[g + 1][1]; n++) if (nTo[n] < 0) ns.push(n);
-      if (os.length && ns.length) fn(os, ns);
+      if (os.length && ns.length || oneSided && (os.length || ns.length)) fn(os, ns);
     }
   };
   // (a text said once in each issue first; a text said several times - "Maximum W/C Ratio: 0.29" under
@@ -464,12 +471,59 @@ export function compareParas(O: Para[], N: Para[]): DocDiff {
   //  in mix F came out "moved" from F to H - the hand check of 17 Nov)
   const once = (m: Map<string, number[]>) => new Map([...m].filter(([, v]) => v.length === 1));
   same(once(by(kO, oTo)), once(by(kN, nTo)));
+  /** a short line (under 8 words) right next to a pair, on both sides, at the same distance, with the same text:
+   *  paired too - "Floor:", "Walls:" follow the clause they stand with, and "Warranty:" at the end of a block that
+   *  moved whole (step 1c, DECISIONS 78). Only through short lines: a heading said in every schedule would carry
+   *  the pairing on into the next schedule */
+  const extend = () => {
+    for (let o = 0; o < O.length; o++) {
+      const n = oTo[o];
+      if (n < 0) continue;
+      for (const d of [1, -1]) for (let i = o + d, j = n + d; i >= 0 && j >= 0 && i < O.length && j < N.length && oTo[i] < 0 && nTo[j] < 0 && tO[i].n < 8 && kO[i] && kO[i] === kN[j]; i += d, j += d) put(i, j);
+    }
+  };
+  extend();
   gaps((os, ns) => same(by(kO, oTo, os), by(kN, nTo, ns)));
+  extend();
   // 2. between those kept in order, the rest by place and likeness (a clause edited where it is)
   gaps((os, ns) => alignGap(os, ns, (o, n) => likeness(tO[o], tN[n]) + (O[o].num && O[o].num === N[n].num ? 0.05 : 0), 0.5, put));
-  // 3. the rest: the same text left in both, found as often - by order (a block moved whole, its repeated
-  //  headings with it); then alike enough anywhere: moved (perhaps edited too)
-  same(by(kO, oTo), by(kN, nTo));
+  /** step 1c (DECISIONS 78): between two paragraphs that are paired with partners in the same order, the same
+   *  text found as often on both sides is paired there - short lines too ("Floor:", "Test documents:") */
+  const between = () => {
+    const paired = O.map((_, o) => o).filter((o) => oTo[o] >= 0);
+    for (let k = 0; k + 1 < paired.length; k++) {
+      const a = paired[k], b = paired[k + 1];
+      if (b - a < 2 || oTo[b] - oTo[a] < 2 || oTo[b] < oTo[a]) continue;
+      const os: number[] = [], ns: number[] = [];
+      for (let o = a + 1; o < b; o++) if (oTo[o] < 0) os.push(o);
+      for (let n = oTo[a] + 1; n < oTo[b]; n++) if (nTo[n] < 0) ns.push(n);
+      if (!os.length || !ns.length) continue;
+      const mO = by(kO, oTo, os), mN = by(kN, nTo, ns);
+      for (const [x, ol] of mO) { const nl = mN.get(x); if (nl && nl.length === ol.length) ol.forEach((o, j) => put(o, nl[j])); }
+    }
+  };
+  between();
+  extend();
+  // 3. the rest: the same text left in both, found as often - by order over the whole document only when it is
+  //  left once in each issue, or all its leftovers lie in one gap on each side (a block moved whole, its repeated
+  //  headings with it - 70); then alike enough anywhere: moved (perhaps edited too)
+  {
+    const gapOf = (side: 0 | 1) => {
+      const m = new Int32Array(side ? N.length : O.length).fill(-1);
+      let g = 0;
+      // (a gap with leftovers on one side only counts too: a block moved whole leaves one on each side - Engineer B4)
+      gaps((os, ns) => { for (const i of side ? ns : os) m[i] = g; g++; }, true);
+      return m;
+    };
+    const gO = gapOf(0), gN = gapOf(1);
+    const mO = by(kO, oTo), mN = by(kN, nTo);
+    const oneGap = (l: number[], g: Int32Array) => l.every((i) => g[i] >= 0 && g[i] === g[l[0]]);
+    for (const [x, os] of mO) {
+      const ns = mN.get(x);
+      if (!ns || ns.length !== os.length) continue;
+      if (os.length === 1 || (tO[os[0]].n >= 8 && oneGap(os, gO) && oneGap(ns, gN))) os.forEach((o, j) => put(o, ns[j]));
+    }
+  }
   const cands: [number, number, number][] = [];
   const index = new Map<string, number[]>();
   N.forEach((_, n) => { if (nTo[n] < 0) for (const w of tN[n].words.keys()) index.set(w, [...(index.get(w) ?? []), n]); });
@@ -481,6 +535,58 @@ export function compareParas(O: Para[], N: Para[]): DocDiff {
   });
   cands.sort((a, b) => b[0] - a[0]);
   for (const [, o, n] of cands) if (oTo[o] < 0 && nTo[n] < 0) put(o, n);
+  // (and short lines left between paragraphs paired again: inside a block that moved whole)
+  between();
+  extend();
+  // (runs of the same text are interchangeable: a section said twice in each issue with another between them
+  //  - a 3,000-page MEP spec: Telephone, Telephone, Public Address -> Telephone, Public Address, Telephone - had its copies
+  //  paired across each other and a whole copy "Moved" (385 rows). Runs of one text are given to their partners
+  //  in order when that keeps more paragraphs in order)
+  {
+    const runs: { o: number; n: number; len: number; sig: string }[] = [];
+    // (only texts said more than once: a run stops at a paragraph of its own, which has one partner anyway)
+    const times = new Map<string, number>();
+    for (const x of kO) if (x) times.set(x, (times.get(x) || 0) + 1);
+    const rep = (o: number) => (times.get(kO[o]) || 0) > 1;
+    const keptCount = () => inOrder(O.map((_, o) => o).filter((o) => oTo[o] >= 0), (o) => oTo[o]).length;
+    // (first all of them at once - two copies of a section that differ by an edit or two are runs of different
+    //  texts that only keep more in order together - then each kind of run by itself)
+    {
+      const groups = new Map<string, number[]>();
+      O.forEach((_, o) => { const n = oTo[o]; if (n >= 0 && rep(o) && kO[o] === kN[n]) { const g = groups.get(kO[o]); if (g) g.push(o); else groups.set(kO[o], [o]); } });
+      const was = new Map<number, number>();
+      const before = keptCount();
+      for (const os of groups.values()) {
+        if (os.length < 2) continue;
+        const ns = os.map((o) => oTo[o]).sort((a, b) => a - b);
+        os.forEach((o, j) => { was.set(o, oTo[o]); put(o, ns[j]); });
+      }
+      if (keptCount() <= before) for (const [o, n] of was) put(o, n);
+    }
+    for (let o = 0; o < O.length;) {
+      const n = oTo[o];
+      if (n < 0 || kO[o] !== kN[n] || !rep(o)) { o++; continue; }
+      let len = 1;
+      while (o + len < O.length && oTo[o + len] === n + len && kO[o + len] === kN[n + len] && rep(o + len)) len++;
+      runs.push({ o, n, len, sig: kO.slice(o, o + len).join('\u0001') });
+      o += len;
+    }
+    const bySig = new Map<string, typeof runs>();
+    for (const r of runs) { const g = bySig.get(r.sig); if (g) g.push(r); else bySig.set(r.sig, [r]); }
+    // (each try counts the paragraphs in order over the whole document: the 64 groups with the most paragraphs
+    //  out of place are tried, the rest left - 20,000 paragraphs with a repeated line after every clause took
+    //  19 s for no change, Engineer B5; the Telephone sections are one group)
+    const out = [...bySig.values()].filter((g) => { if (g.length < 2) return false; const st = g.map((r) => r.n).sort((a, b) => a - b); return !g.every((r, k) => r.n === st[k]); });
+    out.sort((a, b) => b.reduce((x, r) => x + r.len, 0) - a.reduce((x, r) => x + r.len, 0));
+    for (const g of out.slice(0, 64)) {
+      const starts = g.map((r) => r.n).sort((a, b) => a - b);
+      const before = keptCount();
+      const was = g.map((r) => r.n);
+      const assign = (ns: number[]) => g.forEach((r, k) => { for (let d = 0; d < r.len; d++) put(r.o + d, ns[k] + d); });
+      assign(starts);
+      if (keptCount() <= before) assign(was);
+    }
+  }
   const paired = O.map((_, o) => o).filter((o) => oTo[o] >= 0);
   const kept = new Set(inOrder(paired, (o) => oTo[o]));
   return {

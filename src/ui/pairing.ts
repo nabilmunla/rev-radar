@@ -19,9 +19,12 @@ export interface SheetRef {
   label?: string;
   /** the file could not be read (damaged, password): still listed, as a problem */
   bad?: string;
+  /** the sheet number and title read off the sheet's title block (T11; pages of combined PDFs and
+   *  renamed files) - how it is listed */
+  read?: { no: string; title: string };
 }
 
-export interface PairPlan { old: SheetRef | null; neu: SheetRef | null; how: 'name' | 'number' | 'content' | 'order' | 'hand' | 'none'; score?: number }
+export interface PairPlan { old: SheetRef | null; neu: SheetRef | null; how: 'name' | 'number' | 'sheet' | 'content' | 'order' | 'hand' | 'none'; score?: number }
 
 const stripExt = (s: string) => s.replace(/\.pdf$/i, '');
 const baseName = (p: string) => stripExt(p.split(/[\\/]/).pop() || p);
@@ -206,7 +209,7 @@ export interface Fingerprint { ref: SheetRef; words: string[] }
  * words - drawing number, title, room names - pair; the title block every sheet carries
  * cancels out.
  */
-export function pairByContent(olds: Fingerprint[], news: Fingerprint[], minScore = 0.35): { pairs: PairPlan[]; olds: SheetRef[]; news: SheetRef[] } {
+export function pairByContent(olds: Fingerprint[], news: Fingerprint[], minScore = 0.35, bySheet: [number, number][] = []): { pairs: PairPlan[]; olds: SheetRef[]; news: SheetRef[] } {
   // single sheets whose file names carry different drawing numbers: typical floors read alike
   // (GA L04 / GA L09) - only a near copy is the same sheet renumbered
   const nameNo = (r: SheetRef) => (r.pages === 1 ? drawingNoBare(drawingNo(baseName(r.rel))) : '');
@@ -252,6 +255,24 @@ export function pairByContent(olds: Fingerprint[], news: Fingerprint[], minScore
     usedO.add(i); usedN.add(j);
     pairs.push({ old: olds[i].ref, neu: news[j].ref, how, score: s == null ? undefined : +s.toFixed(3) });
   };
+  // the pages paired by the sheet number read off them (T11, DECISIONS 76) - first, unless what the
+  // pages say contradicts it: the two score under 0.35 while one of them has another partner at 0.8
+  // or more (a false number on a spec page). The words are scored over all the pages either way, so
+  // the content pairing of the rest is as without them.
+  if (bySheet.length) {
+    const score = new Map<number, number>(), bestO = new Map<number, [number, number][]>(), bestN = new Map<number, [number, number][]>();
+    for (const c of cand) {
+      score.set(c.i * news.length + c.j, c.s);
+      if (c.s >= 0.8) { (bestO.get(c.i) || bestO.set(c.i, []).get(c.i)!).push([c.j, c.s]); (bestN.get(c.j) || bestN.set(c.j, []).get(c.j)!).push([c.i, c.s]); }
+    }
+    for (const [i, j] of bySheet) {
+      if (usedO.has(i) || usedN.has(j)) continue;
+      const s = score.get(i * news.length + j) ?? 0;
+      const elsewhere = (bestO.get(i) || []).some(([k]) => k !== j) || (bestN.get(j) || []).some(([k]) => k !== i);
+      if (s < 0.35 && elsewhere) continue;
+      take(i, j, 'sheet', s || undefined);
+    }
+  }
   for (const c of cand) {
     if (usedO.has(c.i) || usedN.has(c.j) || c.s < need(c.i, c.j)) continue;
     take(c.i, c.j, 'content', c.s);
@@ -324,6 +345,7 @@ export function sheetName(s: SheetRef): string {
 /** the sheet as listed: its drawing number (else the file name, with its folder) - and for a
  *  page of a combined PDF its page label when that looks like a drawing number, else "file p.N" */
 export function sheetKeyOf(s: SheetRef): string {
+  if (s.read?.no) return s.read.no;
   const d = sheetNo(baseName(s.rel));
   const named = d || stripExt(s.rel).replace(/\\/g, '/');
   if (s.pages <= 1) return named;

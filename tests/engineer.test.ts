@@ -1,7 +1,7 @@
 // The Engineer's review of 0.5.0 (17 Nov): A1-A6, A8-A14 - each test fails on 4e59475.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pdfParas, sectionsOf, docEntries, type Para, type DocEntry } from '../src/engine/docs';
+import { pdfParas, sectionsOf, docEntries, compareParas, type Para, type DocEntry } from '../src/engine/docs';
 import { compareBoq, pairMeta, type BoqItem, type BoqDoc } from '../src/engine/boq';
 import { figsOf, hunksOf } from '../src/engine/figs';
 import { wordDiff, strictWord } from '../src/engine/boq';
@@ -132,4 +132,76 @@ test('A15 (17 Nov, hand check of the STR spec): a line said several times is pai
   assert.ok(!es.some((e) => e.moved || e.kind === 'moved'), say);
   assert.ok(es.some((e) => e.kind === 'changed' && /0\.29/.test(e.o?.text ?? '') && /0\.32/.test(e.n?.text ?? '')), say);
   assert.ok(es.some((e) => e.kind === 'changed' && /510/.test(e.o?.text ?? '') && /470/.test(e.n?.text ?? '')), say);
+});
+
+// The Engineer's review of 0.5.1 (17 Nov): B3-B6 - each fails on 9cd6ce0.
+const lineW = (t: string, y: number) => { let x = 60; return t.split(' ').map((w) => { const o = { s: w, x0: x, y0: y, x1: x + w.length * 5, y1: y + 10 }; x += w.length * 5 + 4; return o; }); };
+const parasOf = (pages: [string, number][][]) => pdfParas('s.pdf', pages.length, (i) => pages[i].flatMap(([t, y]) => lineW(t, y)), () => 842);
+
+test('B3: a heading in capitals after a list item without a full stop, or after a comma, or at the top of the next page, stays a heading', () => {
+  const ps = parasOf([[
+    ['SUBMITTALS', 100], ['Submit the following for the approval of the Engineer before any material is ordered for the Works', 120],
+    ['Manufacturer\'s printed installation instructions and data sheets for each type of insulation material', 132],
+    ['QUALITY ASSURANCE', 150],
+    ['Installer shall be a firm with not less than five years of experience in work of this kind and size.', 170],
+    ['Fire test certificates for every insulation product and adhesive proposed for use in the Works,', 182],
+    ['DELIVERY AND STORAGE', 200],
+    ['Deliver the materials to the site in the original packaging of the manufacturer with the labels intact.', 220],
+    ['Schedule of the materials to be used in the Works and the name of the manufacturer of each', 232],
+  ], [
+    ['PRODUCTS', 100], ['All of the products shall be new and of the best quality of their respective kinds as specified.', 120],
+  ]]);
+  const t = ps.map((p) => p.text);
+  for (const h of ['QUALITY ASSURANCE', 'DELIVERY AND STORAGE', 'PRODUCTS']) assert.ok(t.includes(h), h + ': ' + t.join(' | '));
+  assert.equal(ps.find((p) => p.text.startsWith('Installer'))!.head, 'QUALITY ASSURANCE');
+  assert.equal(ps.find((p) => p.text.startsWith('Deliver the'))!.head, 'DELIVERY AND STORAGE');
+  assert.equal(ps.find((p) => p.text.startsWith('All of the'))!.head, 'PRODUCTS');
+  // (the clause endings DECISIONS 86 was made for still join)
+  const q = parasOf([[['Type A durometer hardness, ASTM D2240; minimum tensile strength 15.5 MPa, and to be tested to', 100], ['ASTM D412.', 112],
+    ['Paint the ducts to the colours of the schedule and to the identification requirements for', 130], ['VOC', 142],
+    ['Fire-resistance ratings for structural elements shall comply with Dubai Civil Defence', 160], ['"CONSTRUCTION REQUIREMENTS FOR HIGH-RISE BUILDINGS".', 172]]]).map((p) => p.text);
+  assert.ok(q.some((x) => x.endsWith('tested to ASTM D412.')) && q.some((x) => x.endsWith('requirements for VOC')) && q.some((x) => x.endsWith('BUILDINGS".')), q.join(' | '));
+});
+
+const Pi = (t: string, i: number): Para => ({ i, file: 'f', page: 1, num: '', text: t, head: '' } as Para);
+const tally = (d: ReturnType<typeof compareParas>) => ({ moved: d.pairs.filter((p) => p.moved).length, changed: d.pairs.filter((p) => p.changed).length, removed: d.removed.length, added: d.added.length });
+
+test('B4: a block of 250 copies of one long line moved whole is "Moved", not removed + added (all its leftovers in one gap each side)', () => {
+  const pre = Array.from({ length: 300 }, (_, i) => `Clause A${i} alpha${i} beta${i} gamma${i} delta${i} epsilon${i} zeta${i} eta${i} theta${i}`);
+  const post = Array.from({ length: 300 }, (_, i) => `Clause B${i} iota${i} kappa${i} lambda${i} mu${i} nu${i} xi${i} omicron${i} pi${i}`);
+  const blk = Array.from({ length: 250 }, () => 'To be confirmed by the Contractor before the work on site is started');
+  const t = tally(compareParas([...pre, ...blk, ...post].map(Pi), [...pre, ...post, ...blk].map(Pi)));
+  assert.deepEqual({ removed: t.removed, added: t.added, changed: t.changed }, { removed: 0, added: 0, changed: 0 });
+  assert.ok(t.moved >= 250, JSON.stringify(t));
+});
+
+test('B5: 20,000 paragraphs, halves swapped, repeated lines between unique clauses - compared in under 4 s', () => {
+  let seed = 5;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const W = Array.from({ length: 3000 }, (_, i) => 'w' + i.toString(36));
+  const sent = (n: number) => Array.from({ length: n }, () => W[Math.floor(rnd() * W.length)]).join(' ');
+  const boiler = Array.from({ length: 2500 }, () => 'Comply with the requirements of ' + sent(8));
+  const mk = (tag: string) => { const out: string[] = []; for (let i = 0; i < 5000; i++) { out.push('Clause ' + tag + i + ' ' + sent(12)); out.push(boiler[i % 2500]); } return out; };
+  const A = mk('a'), B = mk('b');
+  const t0 = performance.now();
+  const t = tally(compareParas([...A, ...B].map(Pi), [...B, ...A].map(Pi)));
+  const ms = performance.now() - t0;
+  assert.equal(t.removed + t.added + t.changed, 0, JSON.stringify(t));
+  assert.ok(ms < 4000, `${Math.round(ms)} ms`);
+});
+
+test('B6b (sweep, 17 Nov): a table on strongly coloured paper (pure yellow) is not read through a paper level near 0 - its ink would vanish', async () => {
+  const { paperOf } = await import('../src/engine/picdiff');
+  const w = 200, h = 100, px = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4, ink = y % 20 < 2 || (x % 40 < 3 && y > 5);
+    px.set(ink ? [0, 0, 0, 255] : [255, 255, 0, 255], i);
+  }
+  const r = paperOf(px);
+  assert.ok(!r.text || r.paper >= 100, JSON.stringify(r));
+  // (grey and cream papers as before)
+  for (const c of [[200, 200, 200], [250, 240, 215], [255, 255, 255]]) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = (y * w + x) * 4, ink = y % 20 < 2 || (x % 40 < 3 && y > 5); px.set(ink ? [0, 0, 0, 255] : [...c, 255], i); }
+    assert.ok(paperOf(px).text, String(c));
+  }
 });

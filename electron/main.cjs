@@ -442,6 +442,7 @@ ipcMain.handle('update:showSetup', () => {
 ipcMain.handle('update:openPage', () => { const u = updater.snapshot().page; if (u && /^https:\/\//.test(u)) void shell.openExternal(u); return true; });
 app.on('will-quit', () => {
   updater.stop();
+  docxConv.stop(); // (a conversion running now: its PowerShell and Word ended, before the folder goes)
   docxConv.clean();
   // (the text the Documents tab reads for "Text as read": src/engine/host.ts writeReading)
   try { const w = path.join(os.tmpdir(), APP, 'work'); for (const n of fs.readdirSync(w)) if (/^read-[\w-]+\.json$/.test(n)) fs.rmSync(path.join(w, n), { force: true }); } catch (_) { /* none */ }

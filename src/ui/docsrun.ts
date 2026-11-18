@@ -28,6 +28,9 @@ export interface DocSession {
   /** (T7) the Word files that were turned into PDFs (by place in the set): the PDF in the temp folder - what is
    *  compared and shown; the line under the tab when some were not (why: text as read, never silent) */
   conv?: { o: Record<number, string>; n: Record<number, string> };
+  /** (T16b) how each Word file was read - as pages (Word / LibreOffice) or as text and why; one line for each way (the register's
+   *  Summary says the same); `wordNote` is them as one line, shown under the tools */
+  wordLines?: string[];
   wordNote?: string;
   /** (T7) the PDFs' paragraphs as read, from the file the engine wrote - loaded when "Text as read" is first asked for */
   reading?: DocsReading; readingError?: string;
@@ -35,28 +38,38 @@ export interface DocSession {
 /** the file the engine reads for a side's file: a Word file's PDF, else the file itself */
 export const convPath = (s: DocSession, side: 'o' | 'n', idx: number): string | undefined => s.conv?.[side][idx] ?? (side === 'o' ? s.oldSet : s.newSet).files[idx]?.path;
 
-/** the Word files of both sets turned into PDFs (Word on Windows, else LibreOffice - electron/wordpdf.cjs); one that
- *  cannot be is read as text, and the line says which and why */
-async function convertWord(oldSet: DocSet, newSet: DocSet, live: () => boolean, note: (t: string) => void): Promise<{ conv: NonNullable<DocSession['conv']>; wordNote: string }> {
+/** the Word files of both sets turned into PDFs (Word on Windows, else LibreOffice - electron/wordpdf.cjs, on unless
+ *  RR_OFF=docxpdf); one that cannot be is read as text. `lines`: how each file was read, said on screen and in the
+ *  register - files read the same way together, the pages ones first */
+async function convertWord(oldSet: DocSet, newSet: DocSet, live: () => boolean, note: (t: string) => void): Promise<{ conv: NonNullable<DocSession['conv']>; lines: string[] }> {
   const conv: NonNullable<DocSession['conv']> = { o: {}, n: {} };
   const todo: { side: 'o' | 'n'; idx: number; f: FileItem }[] = [];
   for (const [side, set] of [['o', oldSet], ['n', newSet]] as const) set.files.forEach((f, idx) => { if (/\.docx$/i.test(f.path)) todo.push({ side, idx, f }); });
-  const fails: { name: string; why: string }[] = [];
+  const read: { side: 'o' | 'n'; name: string; how: string; pages: boolean }[] = [];
   let k = 0;
   for (const t of todo) {
     if (!live()) break;
     note(`Turning the Word files into PDFs (${++k} of ${todo.length})…`);
     let r: Awaited<ReturnType<typeof rr.docxConvert>> | null = null;
     try { r = rr.docxConvert ? await rr.docxConvert(t.f.path) : null; } catch { r = null; }
-    // (switched off in this version: Word files are read as text, as before - nothing to say)
-    if (r && !r.ok && (r as { off?: boolean }).off) { note(''); return { conv, wordNote: '' }; }
-    if (r?.ok) conv[t.side][t.idx] = r.pdf;
-    else fails.push({ name: t.f.rel.split(/[\\/]/).pop() || t.f.rel, why: r && !r.ok ? r.why : 'the converter could not be asked' });
+    // (switched off - RR_OFF=docxpdf: Word files are read as text, as in 0.5.0 - nothing to say)
+    if (r && !r.ok && (r as { off?: boolean }).off) { note(''); return { conv, lines: [] }; }
+    const name = t.f.rel.split(/[\\/]/).pop() || t.f.rel;
+    if (r?.ok) { conv[t.side][t.idx] = r.pdf; read.push({ side: t.side, name, pages: true, how: `shown as pages (${r.by === 'earlier' ? 'converted earlier' : r.by})` }); }
+    else read.push({ side: t.side, name, pages: false, how: `shown as text as read, not as pages - ${r && !r.ok ? r.why : 'the converter could not be asked'}` });
   }
-  if (!fails.length) return { conv, wordNote: '' };
-  const why = [...new Set(fails.map((x) => x.why))].join('; ');
-  const names = fails.length === todo.length ? `Word file${todo.length === 1 ? '' : 's'}` : `${fails.slice(0, 3).map((x) => x.name).join(', ')}${fails.length > 3 ? '…' : ''}`;
-  return { conv, wordNote: `${names} shown as text as read, not as pages - ${why}` };
+  const lines: string[] = [];
+  for (const pages of [true, false]) {
+    for (const how of [...new Set(read.filter((x) => x.pages === pages).map((x) => x.how))]) {
+      const of = read.filter((x) => x.how === how);
+      const all = of.length === todo.length;
+      // (a name that is in two groups - the same file name in both issues, read differently - says its issue)
+      const label = (x: (typeof read)[number]) => (read.some((y) => y.name === x.name && y.how !== x.how) ? `${x.name} (${x.side === 'o' ? 'old' : 'new'})` : x.name);
+      const names = all ? `Word file${todo.length === 1 ? '' : 's'}` : `${[...new Set(of.map(label))].slice(0, 3).join(', ')}${new Set(of.map(label)).size > 3 ? '…' : ''}`;
+      lines.push(`${names} ${how}`);
+    }
+  }
+  return { conv, lines };
 }
 /** the PDFs' paragraphs as read: the file the engine wrote beside the result, read by an engine */
 export async function loadReading(s: DocSession) {
@@ -79,9 +92,9 @@ export async function startDocs(oldSet: DocSet, newSet: DocSet) {
   try {
     const c = workers.reduce((a, b) => (b.busy < a.busy ? b : a), workers[0]);
     // (Word files first: turned into PDFs where a converter is - then they are compared and shown as PDFs)
-    const { conv, wordNote } = await convertWord(oldSet, newSet, () => my === runId && !!ui.docs, (t) => { if (my === runId && ui.docs) { ui.docs.note = t; bump(); } });
+    const { conv, lines } = await convertWord(oldSet, newSet, () => my === runId && !!ui.docs, (t) => { if (my === runId && ui.docs) { ui.docs.note = t; bump(); } });
     if (my !== runId || !ui.docs) return;
-    ui.docs.conv = conv; ui.docs.wordNote = wordNote; ui.docs.note = '';
+    ui.docs.conv = conv; ui.docs.wordLines = lines; ui.docs.wordNote = lines.join('; '); ui.docs.note = '';
     const side = (s: DocSet, tag: 'o' | 'n') => s.files.map((f, idx) => ({ file: fileArg(conv[tag][idx] ?? f.path), name: f.rel.split(/[\\/]/).pop() || f.rel }));
     let r = await c.call<DocsResult & { scans?: ScanInfo[] }>('docsCompare', [side(oldSet, 'o'), side(newSet, 'n')]);
     if (my !== runId || !ui.docs) return;
@@ -250,6 +263,7 @@ export async function exportDocsExcel() {
   const r = s.result;
   const sum: XCell[][] = [[H('Document comparison'), ''], ['Old issue', s.oldSet.paths.join('; ')], ['New issue', s.newSet.paths.join('; ')],
     ['Sections (old / new / paired)', `${r.sections.old} / ${r.sections.neu} / ${r.sections.paired}`], ['Paragraphs (old / new)', `${r.paras.old} / ${r.paras.neu}`],
+    ...(s.wordLines ?? []).map((l) => ['Word files', l] as XCell[]),
     ...r.notes.map((n) => ['Note', n] as XCell[])];
   const xl = writeXlsx([{ name: 'Changes', rows, widths: [6, 26, 24, 14, 34, 40, 9, 8, 80, 9, 8, 80, 26, 7, 9], header: 1 }, { name: 'Summary', rows: sum, widths: [28, 90] }]);
   try { await rr.write(out, xl); } catch (e) { toast('Could not save the register: ' + plainError(e, 'the file'), 'err', 9000); return; }

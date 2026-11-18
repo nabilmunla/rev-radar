@@ -15,6 +15,7 @@ import { exportReport, type ExportSheet } from './report';
 import { readable } from './heavy';
 import { SUPERSEDED } from './rpc';
 import { readBook, type Book } from './sheets';
+import { fingerprintPages } from './fpread';
 import { readItems, compareBoq, billOf, byBill, type BoqDoc } from './boq';
 import { pdfBook } from './pdftable';
 import { pdfParas, docxParas, sectionsOf, docEntries, placePics, readingOf, readingChunks, zipMedia, type DocSection, type DocsResult, type DocsReading } from './docs';
@@ -86,18 +87,7 @@ async function handlers(): Promise<Record<string, Handler>> {
     },
 
     /** what a page says (for pairing sheets of two sets): its words, upper case */
-    fingerprint(src: VFile, pages: number[]) {
-      const id = openTemp(src);
-      try {
-        return pages.map((p) => {
-          try {
-            const ws = pf.words(id, p);
-            pf.dropPages(id);
-            return { page: p, words: ws.map((w) => w.s.toUpperCase()).filter((s) => s.length >= 2).slice(0, 4000) };
-          } catch (e) { return { page: p, words: [], error: String(e) }; }
-        });
-      } finally { pf.closeDoc(id); }
-    },
+    fingerprint(src: VFile, pages: number[]) { return fingerprintPages(src, pages); },
 
     /** the list picture of one sheet (new / removed sheets) */
     async thumb(src: VFile, page: number) {

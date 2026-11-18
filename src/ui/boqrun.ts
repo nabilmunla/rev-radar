@@ -174,10 +174,10 @@ export function boqGroups(entries: BoqEntry[]): Map<number, BoqEntry[]> {
   return m;
 }
 export const boqMates = (s: BoqSession, e: BoqEntry): BoqEntry[] => (e.rep === undefined ? [] : (boqGroups(s.entries).get(e.rep) ?? []).filter((x) => x !== e));
-/** tick the entry and all its group; the number newly ticked */
+/** tick the entry and all its group; the number of items newly ticked */
 export function boqTickGroup(s: BoqSession, e: BoqEntry): number {
   let n = 0;
-  for (const x of [e, ...boqMates(s, e)]) if (!s.ticked.has(x.k)) { s.ticked.add(x.k); n++; }
+  for (const x of [e, ...boqMates(s, e)]) if (!s.ticked.has(x.k)) { s.ticked.add(x.k); n += itemCount(x); }
   ticksChanged();
   return n;
 }
@@ -188,6 +188,14 @@ export function boqFigureText(e: BoqEntry): string {
   for (const f of e.figs ?? []) out.push(`${f.o && f.n ? `${f.o} → ${f.n}` : f.n ? `+ ${f.n}` : `− ${f.o}`}${f.unit ? ' ' + f.unit : ''}`);
   return out.join('; ');
 }
+
+/** (T15, DECISIONS 80) the items an entry stands for: a heading reworded over N items is N, every other line is 1 -
+ *  the one place the counts (chips, To review, summary, register) are made from */
+export const itemCount = (e: BoqEntry): number => (e.kind === 'heading' ? e.items!.length : 1);
+/** the items in the entries a filter shows (the chips on the left, "to review") */
+export const boqCount = (s: BoqSession, f: BoqFilter): number => s.entries.reduce((n, e) => n + (matches(e, f, s) ? itemCount(e) : 0), 0);
+/** the changed items (a heading reworded counts its items) - the summary's "Changed" */
+export const boqChanged = (entries: BoqEntry[]): number => entries.reduce((n, e) => n + (e.kind === 'changed' || e.kind === 'heading' ? itemCount(e) : 0), 0);
 
 /** what the list says about an entry (a few words) */
 export function summary(e: BoqEntry): string {
@@ -261,7 +269,7 @@ async function rememberBoq(s: BoqSession) {
   try {
     const st = await rr.settings();
     const counts: Record<string, number> = {};
-    for (const f of ['changes', 'added', 'removed'] as BoqFilter[]) counts[f] = s.entries.filter((e) => matches(e, f, s)).length;
+    for (const f of ['changes', 'added', 'removed'] as BoqFilter[]) counts[f] = boqCount(s, f);
     const byK = new Map(s.entries.map((e) => [e.k, e]));
     const ticks = [...s.ticked].map((k) => byK.get(k)).filter(Boolean).map((e) => tickKeyOf(e!));
     const row: BoqRecent = { when: Date.now(), label: `${s.oldSet.label} → ${s.newSet.label}`, old: { paths: s.oldSet.paths }, neu: { paths: s.newSet.paths }, partial: s.partial, counts, sigs: setSigs(s.oldSet, s.newSet), ticks };
@@ -308,8 +316,13 @@ export async function exportBoqExcel() {
   const sum: XCell[][] = [
     [H('BOQ comparison'), ''], ['Old issue', s.oldSet.paths.join('; ')], ['New issue', s.newSet.paths.join('; ')],
     ['Items in the old issue', r.old.items.length], ['Items in the new issue', r.neu.items.length],
-    ['Changed', s.entries.filter((e) => e.kind === 'changed' || e.kind === 'heading').length], ['Added', r.added.length], ['Removed', r.removed.length],
+    ['Changed', boqChanged(s.entries)], ['Added', r.added.length], ['Removed', r.removed.length],
+    // ("only": an item renumbered and changed is a change - the Renumbered filter shows both)
     ['Renumbered only', s.entries.filter((e) => e.kind === 'renumbered').length],
+    // (pictures are rows of the Changes sheet too: their own line, so the lines add up to the rows - sweep)
+    ...(s.entries.some((e) => e.kind === 'pic') ? [['Pictures changed, added or removed', s.entries.filter((e) => e.kind === 'pic').length] as XCell[]] : []),
+    // (T15: every item has its own row, so the rows of the Changes sheet = the chip + the renumbered)
+    ['Rows in Changes = changes + renumbered only', rows.length - 1],
     ...(s.partial ? [['Not in the pages issued', r.outside.length] as XCell[]] : []),
     ...(r.oldPdf || r.newPdf ? [['Note', 'One side was read from a PDF: check the items marked "check" against it'] as XCell[]] : []),
     ...[...r.old.notes, ...r.neu.notes].slice(0, 30).map((n) => ['Note', n] as XCell[]),

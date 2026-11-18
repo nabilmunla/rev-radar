@@ -1,7 +1,8 @@
 // Parts of the comparison that can be switched off (PLAN: a part that misses its gate ships off by
 // default). RR_OFF=tables,picocr switches parts off; RR_ON=<part> turns a part that ships off back on.
-// Read at call time in the engine process (the app passes its environment on). `docxpdf` (hide the Word /
-// LibreOffice converter: Word files are read as text) is read by the main process, electron/wordpdf.cjs.
+// Read at call time in the engine process (the app passes its environment on). `docxpdf` is read by the main
+// process, electron/wordpdf.cjs: the Word / LibreOffice converter is ON by default (T16b); RR_OFF=docxpdf hides it
+// (Word files are read as text, as in 0.5.0).
 
 /** parts shipped off (a missed gate, said in PROGRESS and the release notes) */
 export const DEFAULT_OFF: readonly string[] = [

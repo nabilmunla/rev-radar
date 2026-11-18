@@ -112,17 +112,36 @@ export function alike(a?: Uint8Array, b?: Uint8Array): boolean {
   for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); s += d; if (d > mx) mx = d; }
   return s / a.length < 6 && mx < 40;
 }
-/** ink on paper: most pixels paper, the rest mostly grey (text, lines) */
-function textLike(px: Uint8ClampedArray): boolean {
-  let paper = 0, grey = 0, n = 0;
+/**
+ * The paper of a picture: its own most common colour (A7, DECISIONS 79 - not "nearly white": a table scanned
+ * or pasted on grey or cream paper was judged as a photo and a changed digit in it was not found). Text-like
+ * = ink on paper: 60 % of the pixels within 14 of that colour, the colour light (brightness over 140), and
+ * most of the rest darker with little colour of its own (text, lines). `paper` is the paper's grey level. Or, as
+ * 0.5.0 had it, most pixels over 200 and near grey, the rest mostly grey (paper 255: read as 0.5.0 read it).
+ */
+export function paperOf(px: Uint8ClampedArray): { text: boolean; paper: number } {
+  const hist = new Map<number, number>();
+  for (let i = 0; i < px.length; i += 16) { const k = ((px[i] >> 3) << 10) | ((px[i + 1] >> 3) << 5) | (px[i + 2] >> 3); hist.set(k, (hist.get(k) || 0) + 1); }
+  let mode = 0, best = -1;
+  for (const [k, c] of hist) if (c > best) { best = c; mode = k; }
+  const mr = ((mode >> 10) & 31) * 8 + 4, mg = ((mode >> 5) & 31) * 8 + 4, mb = (mode & 31) * 8 + 4, lum = (mr + mg + mb) / 3;
+  let paper = 0, ink = 0, n = 0, white = 0, grey = 0;
   for (let i = 0; i < px.length; i += 16) {
     const r = px[i], g = px[i + 1], b = px[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
     n++;
-    if (mn > 200 && mx - mn < 30) paper++; else if (mx - mn < 40) grey++;
+    if (Math.max(Math.abs(r - mr), Math.abs(g - mg), Math.abs(b - mb)) <= 14) paper++;
+    else if (mx - mn < 40 && (r + g + b) / 3 < lum) ink++;
+    // (0.5.0's rule beside it: white paper lit unevenly - 250 on one side, 210 on the other - is not within 14 of
+    //  its most common colour, but is text all the same; read as 0.5.0 read it - Engineer B6)
+    if (mn > 200 && mx - mn < 30) white++; else if (mx - mn < 40) grey++;
   }
-  return paper >= n * 0.6 && grey >= (n - paper) * 0.7;
+  // (paper whose weakest colour is under 100 - pure yellow, cyan - is not taken to white: its ink would vanish with it)
+  if (lum > 140 && Math.min(mr, mg, mb) >= 100 && paper >= n * 0.6 && ink >= (n - paper) * 0.7) return { text: true, paper: Math.min(mr, mg, mb) };
+  return { text: white >= n * 0.6 && grey >= (n - white) * 0.7, paper: 255 };
 }
-const gray = (px: Uint8ClampedArray, w: number, h: number): Gray => { const g = new Uint8Array(w * h); for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = Math.min(px[j], px[j + 1], px[j + 2]); return { w, h, px: g }; };
+const textLike = (px: Uint8ClampedArray) => paperOf(px).text;
+/** the grey picture the ink rule reads - the paper taken to white (A7) */
+const gray = (px: Uint8ClampedArray, w: number, h: number, paper = 255): Gray => { const k = 255 / Math.max(1, paper), g = new Uint8Array(w * h); for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = Math.min(255, Math.round(Math.min(px[j], px[j + 1], px[j + 2]) * k)); return { w, h, px: g }; };
 /** average-pooled to at most `max` px on its long side */
 function pool(px: Uint8ClampedArray, w: number, h: number, max = 256): { w: number; h: number; px: Float32Array } {
   const f = Math.max(1, Math.ceil(Math.max(w, h) / max)), W = Math.ceil(w / f), H = Math.ceil(h / f);
@@ -176,7 +195,8 @@ export function judge(ido: string, o: Pic, idn: string, n: Pic): Verdict {
   W = Math.max(16, W); H = Math.max(16, H);
   const po = draw(ido, o, W, H), pn = po ? draw(idn, n, W, H) : null;
   if (!po || !pn) return changedWhole('draw');
-  const text = textLike(po) && textLike(pn);
+  const qo = paperOf(po), qn = paperOf(pn);
+  const text = qo.text && qn.text;
   const why: string[] = [];
   // areas in picture pixels (W x H)
   let areas: number[][] = [];
@@ -191,7 +211,7 @@ export function judge(ido: string, o: Pic, idn: string, n: Pic): Verdict {
     // 2. text-like: the drawings' ink rule at the picture's density, with a scan's tolerance
     const pxPerMm = dpi / 25.4, opt = defaultDiff(pxPerMm);
     opt.r = Math.max(1, Math.round(0.34 * pxPerMm)); opt.t = 64; opt.minAreaPx = Math.round(opt.minAreaPx * 1.3);
-    const r = diff(gray(po, W, H), gray(pn, W, H), opt);
+    const r = diff(gray(po, W, H, qo.paper), gray(pn, W, H, qn.paper), opt);
     if (r.areas.length) { why.push('ink'); areas.push(...mergeOverlaps(r.areas, Math.round(1.5 * pxPerMm)).map((a: Area) => [a.x0, a.y0, a.x1 + 1, a.y1 + 1])); }
   } else {
     // 3. photo-like: colours after pooling to <= 256 px (a re-save or a smaller copy passes)

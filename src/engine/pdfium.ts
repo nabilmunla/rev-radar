@@ -39,7 +39,9 @@ const free = (p: number) => M().wasmExports.free(p);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const X = () => Q() as any;
 
-interface PageCache { ptr: number; text: number; aff: number[]; w: number; h: number; t: number }
+interface PageCache { ptr: number; text: number; aff: number[]; w: number; h: number; t: number; chars?: CharInfo }
+/** every character of a page: its text (one UTF-16 unit per character) and its loose box (x0, y0, x1, y1 a character, page space as shown, y down) */
+export interface CharInfo { text: string; box: Float32Array }
 interface Doc { mem: number; fa: number; slot: number; reader: Reader | null; doc: number; pages: Map<number, PageCache>; sizes: { w: number; h: number }[] }
 const docs = new Map<string, Doc>();
 
@@ -354,8 +356,7 @@ export function words(id: string, pg: number): Word[] {
   const p = page(d, pg);
   const q = Q();
   const mod = M();
-  if (!p.text) p.text = q.FPDFText_LoadPage(p.ptr);
-  const tp = p.text;
+  const tp = textPage(p);
   const E = mod.wasmExports as unknown as Record<string, ((...a: number[]) => number) | undefined>;
   const n = tp ? q.FPDFText_CountChars(tp) : 0;
   const out: Word[] = [];
@@ -418,6 +419,72 @@ export function words(id: string, pg: number): Word[] {
     flush();
   } finally { free(db); }
   return out;
+}
+
+/**
+ * Every character on the page with its loose box in page space (T11, as the PDF Editor's `chars`): read from the text
+ * page words() loads - the page is not opened twice. Kept with the page; dropPages lets it go.
+ */
+export function chars(id: string, pg: number): CharInfo {
+  return charsOf(page(mustDoc(id), pg));
+}
+function boxToPage(m: number[], l: number, r: number, b: number, t: number): [number, number, number, number] {
+  const p1 = apply(m, l, b), p2 = apply(m, r, t);
+  return [Math.min(p1[0], p2[0]), Math.min(p1[1], p2[1]), Math.max(p1[0], p2[0]), Math.max(p1[1], p2[1])];
+}
+function textPage(p: PageCache): number {
+  if (!p.text) p.text = Q().FPDFText_LoadPage(p.ptr);
+  return p.text;
+}
+function charsOf(p: PageCache): CharInfo {
+  if (p.chars) return p.chars;
+  const q = Q();
+  const tp = textPage(p);
+  const n = tp ? q.FPDFText_CountChars(tp) : 0;
+  if (n <= 0) return (p.chars = { text: '', box: new Float32Array(0) });
+  const text = textAt(tp, 0, n);
+  const box = new Float32Array(n * 4);
+  const db = malloc(32);
+  for (let i = 0; i < n; i++) {
+    // loose box = the character's full line height (even selections and highlights)
+    if (!q.FPDFText_GetLooseCharBox(tp, i, db)) { box.set([NaN, NaN, NaN, NaN], i * 4); continue; }
+    const f = new Float32Array(M().HEAPU8.buffer, db, 4); // left, top, right, bottom
+    if (!(f[2] > f[0])) { box.set([NaN, NaN, NaN, NaN], i * 4); continue; }
+    const b = boxToPage(p.aff, f[0], f[2], f[3], f[1]);
+    box.set(b, i * 4);
+  }
+  free(db);
+  return (p.chars = { text, box });
+}
+
+/**
+ * The text of chars [start, start + n) with exactly one UTF-16 unit per char index (text[i] is the
+ * character whose box is box[i]). GetText leaves out characters it treats as control codes (a
+ * hyphen some files map to U+0002...) and says how many units it wrote: when that isn't n, the
+ * text is read char by char instead - everything after such a character drifted onto the next
+ * one's box (selections copied the wrong letters, the search list bolded the wrong words) and the
+ * end of the text held a NUL and leftover memory.
+ */
+function textAt(tp: number, start: number, n: number): string {
+  const q = Q();
+  const tb = malloc((n + 1) * 2);
+  try {
+    const got = q.FPDFText_GetText(tp, start, n, tb) - 1; // (the count includes the closing NUL)
+    if (got === n) {
+      const u16 = new Uint16Array(M().HEAPU8.buffer, tb, n);
+      let text = '';
+      for (let i = 0; i < n; i += 4096) text += String.fromCharCode(...u16.subarray(i, Math.min(n, i + 4096)));
+      return text;
+    }
+  } finally { free(tb); }
+  const out: string[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const u = q.FPDFText_GetUnicode(tp, start + i);
+    // (control codes a page maps its glyphs to - hidden by GetText - as an invisible soft hyphen;
+    // a code point beyond 16 bits can't take one unit: the replacement character)
+    out[i] = (u < 32 && u !== 9 && u !== 10 && u !== 13) || (u >= 0x7f && u < 0xa0) || u === 0xfffe ? '\u00ad' : u > 0xffff ? '\ufffd' : String.fromCharCode(u);
+  }
+  return out.join('');
 }
 
 /** a quick look at what the page is made of (a scan = one big picture, little else) */

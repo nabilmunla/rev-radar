@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react';
 import { bump } from './model';
 import { Icon } from './icons';
-import { summary, fmt, wordDiff, ticksChanged, needsCheck, boqMates, boqTickGroup, chipOk, isFigure, type BoqEntry, type BoqSession } from './boqrun';
+import { summary, fmt, wordDiff, ticksChanged, needsCheck, boqMates, boqTickGroup, chipOk, isFigure, type BoqEntry, type BoqSession, itemCount } from './boqrun';
 import { FigChip, SameChange } from './DocsSide';
 import { billOf, type BoqGrid, type BoqItem, type BoqResult } from '../engine/boq';
 import { PIC_LABEL } from '../engine/docs';
@@ -256,7 +256,9 @@ export function BoqSide({ s }: { s: BoqSession }) {
   const setView = (p: boolean) => { try { localStorage.setItem('rr.boqPdf', p ? 'pdf' : 'table'); } catch { /* fine */ } setPages(p); };
   // (T8) the chips: counted over the changes the list holds (renumbering apart)
   const base = s.entries.filter((e) => e.kind !== 'renumbered');
-  const cn: Record<Chip, number> = { all: base.length, figs: base.filter(isFigure).length, todo: base.filter((e) => !s.ticked.has(e.k)).length };
+  // (in items: a reworded heading over 4 items is 4 - the chip, the summary and the register agree, T15)
+  const items = (es: typeof base) => es.reduce((n, e) => n + itemCount(e), 0);
+  const cn: Record<Chip, number> = { all: items(base), figs: items(base.filter(isFigure)), todo: items(base.filter((e) => !s.ticked.has(e.k))) };
   return (
     <SideView<BoqItem>
       chip={{ value: s.chip, set: (c) => { s.chip = c; bump(); }, n: cn, ok: (e) => chipOk(s.entries[e], s.chip, s), rev: s.ticked.size, what: s.chip === 'figs' ? 'only the changes in figures' : 'only the changes still to review' }}

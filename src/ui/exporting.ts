@@ -59,7 +59,7 @@ export async function exportExcel() {
     const tb = ok ? titleBlockText(p) : '';
     rows.push([i + 1, p.key, p.title, statusLabel(p), ok ? real.length : null, text, ok ? figText(real.flatMap((k) => p.result!.areas[k].text)) : '', ok ? [...new Set(real.map((k) => groupOfArea(groups, p, k)?.key).filter((k): k is string => !!k))].map(gname).join('; ') : '', tb, movedNote(p), p.status === 'error' ? p.error || '' : '',
       fileOf(p.old), fileOf(p.neu),
-      { name: 'File name', number: 'Drawing number', content: 'Sheet content', order: 'Order', hand: 'By hand', none: '' }[p.how], p.reviewed ? 'Yes' : '']);
+      { name: 'File name', number: 'Drawing number', sheet: 'Number on the sheet', content: 'Sheet content', order: 'Order', hand: 'By hand', none: '' }[p.how], p.reviewed ? 'Yes' : '']);
   });
   // second sheet: every change area of changed sheets
   const rows2: XCell[][] = [['Sheet', 'Change', 'Kind', 'Description', 'Figures', 'Group', 'Where on the sheet', 'Position x (mm)', 'Position y (mm)'].map((v) => ({ v, s: 'h' as const }))];

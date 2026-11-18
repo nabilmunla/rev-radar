@@ -4,7 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { ui, bump, useUI } from './model';
 import { Icon } from './icons';
-import { startBoq, ticksChanged, visible, matches, summary, needsCheck, fmt, wordDiff, boqMates, boqTickGroup, type BoqEntry, type BoqFilter, type BoqSession } from './boqrun';
+import { startBoq, ticksChanged, visible, boqCount, boqChanged, summary, needsCheck, fmt, wordDiff, boqMates, boqTickGroup, type BoqEntry, type BoqFilter, type BoqSession } from './boqrun';
 import type { BoqItem } from '../engine/boq';
 import { BoqSide } from './BoqSide';
 import { FigChip, SameChange } from './DocsSide';
@@ -76,7 +76,7 @@ export function BoqResults() {
   if (s.phase === 'running') return <div className="empty"><span className="dot busy" /> {s.note || 'Reading and pairing the items…'}</div>;
   if (s.phase === 'error') return <div className="empty"><h3>The BOQs could not be compared</h3><p>{s.error}</p><button className="btn" onClick={() => void startBoq(s.oldSet, s.newSet, s.partial)}><Icon n="refresh" size={14} /> Try again</button></div>;
   const r = s.result!;
-  const count = (f: BoqFilter) => s.entries.filter((e) => matches(e, f, s)).length;
+  const count = (f: BoqFilter) => boqCount(s, f);
   const todo = count('todo');
   return (
     <div className={'results' + (st.panels.left ? '' : ' noleft') + (st.panels.right && view === 'list' ? '' : ' noright')}>
@@ -146,10 +146,10 @@ export function BoqResults() {
             <div className="sumtable">
               <Row l="Items, old issue" v={r.old.items.length} />
               <Row l="Items, new issue" v={r.neu.items.length} />
-              <Row l="Changed" v={s.entries.filter((e) => e.kind === 'changed' || e.kind === 'heading').length} />
+              <Row l="Changed" v={boqChanged(s.entries)} />
               <Row l="Added" v={r.added.length} />
               <Row l="Removed" v={r.removed.length} />
-              <Row l="Renumbered only" v={count('renumbered')} />
+              <Row l="Renumbered only" v={s.entries.filter((e) => e.kind === 'renumbered').length} />
               {s.partial && <Row l="Not in the pages issued" v={r.outside.length} />}
             </div>
             <div className="reviewline">{todo ? `${todo} of ${count('changes')} to review` : count('changes') ? 'All changes ticked off' : ''}</div>
