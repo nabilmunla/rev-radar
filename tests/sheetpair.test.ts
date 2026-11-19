@@ -24,7 +24,7 @@ function run(olds: ReadPage[], news: ReadPage[], wo: string[][] = [], wn: string
   const sp = pairBySheetNo(olds, news, witO, witN);
   for (const [r, nm] of sp.names) r.read = nm;
   const io = new Map(olds.map((p, i) => [p.ref, i] as const)), jn = new Map(news.map((p, j) => [p.ref, j] as const));
-  const by = sp.pairs.map(([a, b]) => [io.get(a)!, jn.get(b)!] as [number, number]);
+  const by = sp.pairs.map(([a, b, rep]) => [io.get(a)!, jn.get(b)!, rep] as [number, number, boolean]);
   return pairByContent(olds.map((p, i) => fp(p, wo[i] || ['PLAN'])), news.map((p, j) => fp(p, wn[j] || ['PLAN'])), 0.35, by);
 }
 const nos = (n: number) => Array.from({ length: n }, (_, i) => `A-${101 + i}`);
@@ -120,4 +120,31 @@ test('a sheet whose number is read but not its title keeps the title from its fi
   assert.ok(/Ground Floor Plan/.test(a.title), a.title);
   const b = planToPair({ old: ref('x.pdf', { no: 'A-102', title: 'FIRST FLOOR PLAN' }), neu: ref('y.pdf', { no: 'A-102', title: 'FIRST FLOOR PLAN' }), how: 'sheet' }, 1);
   assert.equal(b.title, 'FIRST FLOOR PLAN');
+});
+
+// 0.6.0 T20 (DECISIONS 93): a number read at a spot whose numbers repeat (a set holding some sheets twice -
+// the Editor's 0.13 reader, Sheet.repeats) pairs two pages only when their content agrees (score >= 0.35);
+// the plain veto (another partner at 0.8) is not needed. Fails on 0.5.1: no repeats flag, the pair is taken.
+test('a number from a spot whose numbers repeat pairs only when the content agrees', () => {
+  // 30 A1 pages: A-101..A-120, the first ten twice - the spot repeats (repeatedNos), the other ten are unique
+  const set = [...nos(20), ...nos(10)];
+  const o = combined('/o/Compiled.pdf', set), n = combined('/n/Compiled.pdf', set);
+  const sp = pairBySheetNo(o, n);
+  const byNo = new Map(sp.pairs.map(([a, b, rep]) => [o.findIndex((p) => p.ref === a), [n.findIndex((p) => p.ref === b), rep]] as const));
+  for (let i = 10; i < 20; i++) assert.deepEqual(byNo.get(i), [i, true], `A-${101 + i} pairs by number, marked as read at a repeating spot`);
+  for (let i = 0; i < 10; i++) assert.equal(byNo.has(i), false, `A-${101 + i} is on two pages: never paired by its number`);
+  // contents: page 14 (A-115) unlike its numbered partner and like nothing else; page 15 (A-116) like it
+  const wo = set.map((_, i) => ['PLAN', `R${i}`]), wn = set.map((_, i) => ['PLAN', `R${i}`]);
+  wo[14] = ['DOORS', 'HINGES', 'LOCKS', 'Q1']; wn[14] = ['CONCRETE', 'CURING', 'SLUMP', 'Q2'];
+  const r = run(o, n, wo, wn);
+  const p14 = r.pairs.find((p) => p.old === o[14].ref);
+  assert.ok(!p14 || p14.how !== 'sheet', 'unlike content: not paired by the repeating spot\'s number');
+  const p15 = r.pairs.find((p) => p.old === o[15].ref);
+  assert.ok(p15 && p15.neu === n[15].ref && p15.how === 'sheet', 'like content: paired by its number');
+  // the same unlike pair read at a spot that does not repeat is still taken (0.5.1's rule, unchanged)
+  const o2 = combined('/o/Plain.pdf', nos(20)), n2 = combined('/n/Plain.pdf', nos(20));
+  const w2o = nos(20).map((_, i) => ['PLAN', `R${i}`]), w2n = nos(20).map((_, i) => ['PLAN', `R${i}`]);
+  w2o[14] = wo[14]; w2n[14] = wn[14];
+  const r2 = run(o2, n2, w2o, w2n);
+  assert.equal(r2.pairs.find((p) => p.old === o2[14].ref)?.how, 'sheet');
 });

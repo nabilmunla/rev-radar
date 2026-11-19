@@ -14,16 +14,21 @@ const asked: string[] = [];
   rr: {
     saveDialog: async () => 'x.xlsx', write: async (_p: string, b: Uint8Array) => { saved = b; }, showInFolder: async () => {}, settings: async () => ({}), setSettings: async () => {},
     docxConvert: async (p: string) => { asked.push(p); return convert ? convert(p) : { ok: false, why: 'no converter' }; },
+    // (0.6.0 T23: a Documents compare runs on an engine of its own, started and ended per run)
+    engineAdd: async () => {}, engineStop: async () => {},
   },
 };
 (globalThis as unknown as { requestAnimationFrame: (f: () => void) => number }).requestAnimationFrame = () => 0;
 const D = await import('../src/ui/docsrun');
 const { ui } = await import('../src/ui/model');
-const { workers } = await import('../src/ui/engines');
+const { workers, jobEngines } = await import('../src/ui/engines');
 
-// (an engine that answers the compare with an empty result and remembers what it was given)
+// (an engine that answers the compare with an empty result and remembers what it was given - the comparing engines and,
+//  since 0.6.0 T23, the run's own engine)
 const given: unknown[][] = [];
-workers.push({ busy: 0, call: async (_m: string, a: unknown[]) => { given.push(a); return { entries: [], sections: { old: 0, neu: 0, paired: 0 }, paras: { old: 0, neu: 0 }, notes: [] }; } } as never);
+const fake = async (m: string, a: unknown[] = []) => { if (m === 'ping') return 1; given.push(a); return { entries: [], sections: { old: 0, neu: 0, paired: 0 }, paras: { old: 0, neu: 0 }, notes: [] }; };
+workers.push({ busy: 0, call: fake } as never);
+for (const c of jobEngines()) (c as unknown as { call: typeof fake }).call = fake;
 
 const file = (rel: string) => ({ path: '/in/' + rel, rel, size: 1, mtime: 1 });
 const set = (label: string, rels: string[]) => ({ label, paths: ['/in/' + label], files: rels.map(file) });
@@ -95,4 +100,12 @@ test('T16b: a compare with no Word file never asks the converter, and its regist
   assert.deepEqual(asked, []);
   assert.equal(s.wordNote, '');
   assert.deepEqual(wordRows(await register()), []);
+});
+
+// 0.6.0 T30: a PDF made in an earlier session says by which converter (0.5.1: "converted earlier", by nothing)
+test('T30: a Word file converted in an earlier session - "converted earlier by Word"', async () => {
+  convert = async (p) => ({ ok: true, pdf: p.replace(/\.docx$/, '.pdf'), by: 'Word', cached: true, earlier: true } as never);
+  const s = await run(['a.docx'], ['b.docx']);
+  assert.equal(s.phase, 'done', s.error);
+  assert.equal(s.wordNote, 'Word files shown as pages (converted earlier by Word)');
 });

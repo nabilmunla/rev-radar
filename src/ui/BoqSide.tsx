@@ -261,6 +261,7 @@ export function BoqSide({ s }: { s: BoqSession }) {
   const cn: Record<Chip, number> = { all: items(base), figs: items(base.filter(isFigure)), todo: items(base.filter((e) => !s.ticked.has(e.k))) };
   return (
     <SideView<BoqItem>
+      tab="boq"
       chip={{ value: s.chip, set: (c) => { s.chip = c; bump(); }, n: cn, ok: (e) => chipOk(s.entries[e], s.chip, s), rev: s.ticked.size, what: s.chip === 'figs' ? 'only the changes in figures' : 'only the changes still to review' }}
       m={m} sel={s.sel} itemsOf={(e) => (s.entries[e].pic ? picItem(s.entries[e]) : { o: s.entries[e].o, n: s.entries[e].n })} choose={(e) => { s.sel = e; bump(); }}
       ticked={(e) => s.ticked.has(s.entries[e].k)} titleOf={(mk) => explain(s, s.entries[mk.e], mk)}

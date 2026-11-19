@@ -6,16 +6,23 @@
 //
 // Which engine holds which pairs is known here (in the order the engine opened them: it lets go of
 // the oldest first, as this list does); an engine that starts afresh holds nothing.
-import { viewer, viewer2, pooled, onEngineRestart, nameOf } from './engines';
+import { viewer, viewer2, pooled, onEngineRestart, nameOf, setViewOnScreen } from './engines';
 import type { EngineClient } from '../engine/rpc';
 import { rr } from './api';
+import { mustLetGo } from './letgo';
 
 const holds = new Map<EngineClient, string[]>();
 let front: EngineClient = viewer;
 let perEngine = 1;
+// (the engine watch raises its notice only for the engine on screen - DECISIONS 118)
+setViewOnScreen((e) => e === front);
 
-onEngineRestart((c) => {
-  holds.delete(c);
+/** (M1 C4) the pair an engine that let go (T22 B) is opening next: still its own after its planned restart */
+const reopen = new Map<EngineClient, { id: string; t: number }>();
+onEngineRestart((c, planned) => {
+  const r = planned ? reopen.get(c) : undefined;
+  reopen.delete(c);
+  if (r && Date.now() - r.t < 60_000) holds.set(c, [r.id]); else holds.delete(c);
   dropWarm(c);
   // (started afresh at normal priority: the one making ready gives way again - main.cjs applies it
   //  once the new process is there)
@@ -68,6 +75,32 @@ export function shown(pairId: string, e: EngineClient) {
 export function backEngine(): EngineClient | null {
   if (!pooled) return null;
   return front === viewer ? viewer2 : viewer;
+}
+/**
+ * 0.6.0 T22 B (DECISIONS 106): the engine that makes ready, before it opens `nextId`: past a bar (the engine says so -
+ * PDFium 1.25 GB, MuPDF 400 MB; RR_OFF=viewrecycle: never) for a sheet that is not among the pairs it will still keep
+ * -> it lets go of everything it holds; the host's rule then starts it afresh after that call (a heavy sheet drawn
+ * left ~1.9 GB in it for the rest of the session). Never the engine on screen. True when it let go.
+ */
+export async function letGoIfHeavy(e: EngineClient, nextId: string): Promise<boolean> {
+  if (!pooled || e === front) return false;
+  // (what it holds, and the pair it opens next noted, before any wait: a move meanwhile knows - M1 C3)
+  const was = held(e).filter((id) => id !== nextId);
+  note(e, nextId);
+  let m: { past?: boolean; grewMost?: string | null } | undefined;
+  try { m = await e.call('memory'); } catch { return false; }
+  if (!mustLetGo({ onScreen: e === front, past: m?.past, grewMost: m?.grewMost, held: was, nextId, keep: keepPairs() })) return false;
+  rr.log(`view pool: ${e.name} past its memory bar (the sheet that took it there is not kept) - lets go of ${was.length} pair(s), starts afresh`);
+  // (forgotten before the first close: a move to one of them meanwhile never puts a closing engine on screen - M1 C4)
+  holds.set(e, [nextId]);
+  dropWarm(e);
+  reopen.set(e, { id: nextId, t: Date.now() });
+  for (const id of was) { try { await e.call('viewClose', [id]); } catch { /* the engine is going anyway */ } }
+  return true;
+}
+/** (tests) which engine is on screen and what each holds, by engine name */
+export function poolState(): { front: string; holds: Record<string, string[]> } {
+  return { front: front.name, holds: Object.fromEntries([...holds].map(([e, l]) => [e.name, [...l]])) };
 }
 /** `e` is opening the pair (known before it is: going there meanwhile waits on e, not opens it twice) */
 export function opened(e: EngineClient, pairId: string) { note(e, pairId); }

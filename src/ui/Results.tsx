@@ -3,6 +3,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ui, bump, useUI, visiblePairs, textGroups, groupOfArea, leftOver, hasFigures, type SheetGroup, realAreas, stepAreas, tinyFrom, areaSkip, areaLabels, needsReview, statusLabel, onlyTiny, onlyMoves, moveWords, moveTitle, seamTitle, partName, isTiny, keyPrefix, shortKey, toast, STATUS, type Pair, type UIState } from './model';
 import { rr } from './api';
 import { Icon } from './icons';
+import { usePanels, SidePanel, togglePanel, panelTip } from './PanelSize';
+import { HScroll } from './Scroller';
 import { Viewer, viewCmd, viewBox, type Mode, type NextUp } from './Viewer';
 import { warmOpen } from './viewpool';
 import { fileArg } from '../engine/rpc';
@@ -93,13 +95,6 @@ export function tickGroup(g: SheetGroup) {
 export function toggleHighlight() {
   ui.highlight = !ui.highlight;
   void rr.setSettings({ highlight: ui.highlight });
-  bump();
-}
-
-/** show or hide a side panel (remembered) */
-export function togglePanel(which: 'left' | 'right') {
-  ui.panels = { ...ui.panels, [which]: !ui.panels[which] };
-  void rr.setSettings({ panels: ui.panels });
   bump();
 }
 
@@ -272,7 +267,8 @@ export function Results() {
       if (t?.tagName === 'INPUT' && (t as HTMLInputElement).type === 'range' && e.key.startsWith('Arrow')) return;
       if (document.querySelector('.scrim') || e.ctrlKey || e.altKey || e.metaKey) return;
       if (t?.tagName === 'INPUT') t.blur();
-      const k = e.key.toLowerCase();
+      // [ and ] by the key's place as well: on other keyboard layouts they are not those letters
+      const k = e.code === 'BracketLeft' ? '[' : e.code === 'BracketRight' ? ']' : e.key.toLowerCase();
       if (k === 'n' || k === 'arrowright') { e.preventDefault(); stepArea(1, e.repeat); }
       else if (k === 'p' || k === 'arrowleft') { e.preventDefault(); stepArea(-1, e.repeat); }
       else if (k === 'j' || k === 'arrowdown') { e.preventDefault(); stepSheet(1, e.shiftKey); }
@@ -292,8 +288,8 @@ export function Results() {
         if (p && !e.repeat) { const gs = textGroups(ui.session?.pairs ?? []); const g = (ui.area >= 0 ? groupOfArea(gs, p, ui.area) : null) ?? realAreas(p).map((i) => groupOfArea(gs, p, i)).find(Boolean); if (g) { tickGroup(g); const nx = nextToReview(p); if (nx && p.reviewed) select(nx); } else toast('This change is not on other sheets - R ticks the sheet off', 'ok', 3500, undefined, 'ticked'); }
       }
       else if (k === 'r') { const p = cur(); if (p && !e.repeat) markReviewed(p); }
-      else if (k === '[') togglePanel('left');
-      else if (k === ']') togglePanel('right');
+      else if (k === '[') togglePanel('drawings', 'left');
+      else if (k === ']') togglePanel('drawings', 'right');
       else if (k === '?' || k === 'f1') { e.preventDefault(); ui.keys = true; bump(); }
       else if (k === 'enter' && !cur()) { e.preventDefault(); startReview(); }
       // Escape: off the change (the whole sheet; a zoom of one's own is kept for the next change),
@@ -318,19 +314,24 @@ export function Results() {
   const shown = two && !pair!.result && mode === 'overlay' ? 'side' : mode;
   // the toolbar measured: too narrow for its words, they go (then the fade slider), not the buttons
   const bar = useRef<HTMLDivElement>(null);
+  const pn = usePanels('drawings');
+  // the list shown again: it is at the open sheet (the keys went on while it was hidden)
+  useEffect(() => { if (st.panels.drawings.left) setTimeout(() => document.querySelector(`[data-pid="${ui.selected}"]`)?.scrollIntoView({ block: 'nearest' }), 30); }, [st.panels.drawings.left]);
   useLayoutEffect(() => {
     const el = bar.current;
     if (!el) return;
     const fit = () => {
+      // short of room the words go first (stage 1: the optional ones, 2: all); what still does not fit
+      // scrolls sideways (HScroll) - no tool is ever hidden (DECISIONS 98)
       let t = 0;
       el.dataset.tight = '0';
-      while (t < 6 && el.scrollWidth > el.clientWidth + 1) el.dataset.tight = String(++t);
+      while (t < 2 && el.scrollWidth > el.clientWidth + 1) el.dataset.tight = String(++t);
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [pair?.id, two, mode, flicker, st.area, c.todo, st.panels.left, st.panels.right]);
+  }, [pair?.id, two, mode, flicker, st.area, c.todo, st.panels.drawings.left, st.panels.drawings.right]);
 
   const running = s.phase === 'comparing';
   const [, tick] = useState(0);
@@ -349,8 +350,8 @@ export function Results() {
   const slowFor = slow.length ? Math.max(...slow.map((p) => now - p.since!)) / 1000 : 0;
 
   return (
-    <div className={'results' + (st.panels.left ? '' : ' noleft') + (st.panels.right ? '' : ' noright')}>
-      {st.panels.left && (
+    <div className="results pw" style={pn.style} ref={pn.ref}>
+      <SidePanel side="left" p={pn.left}>
         <aside className="left">
           <div className="filters">
             {FILTERS.map(([f, label, tip]) => ((c[f] && !QUIET.has(f)) || f === 'all' || f === st.filter) ? (
@@ -386,10 +387,12 @@ export function Results() {
             </div>
           )}
         </aside>
-      )}
+      </SidePanel>
       <main className="center">
-        <div className="vtoolbar" ref={bar}>
-          <button className={'btn sm icon panelbtn' + (st.panels.left ? '' : ' on')} onClick={() => togglePanel('left')} title={(st.panels.left ? 'Hide' : 'Show') + ' the sheet list ( [ )'}><Icon n="panelleft" size={16} /></button>
+        <div className="vtbar">
+          {/* the two panel buttons stay put at the ends; what is between them scrolls sideways when it does not fit */}
+          <button className={'btn sm icon panelbtn' + (st.panels.drawings.left ? '' : ' on')} onClick={() => togglePanel('drawings', 'left')} title={panelTip('left', st.panels.drawings.left)}><Icon n="panelleft" size={16} /></button>
+          <HScroll className="vtoolbar" wrapClass="vtscroll" innerRef={bar}>
           {pair && !two ? (
             <>
               <span className="onlyone">{pair.status === 'new' ? 'New sheet: only in the new issue' : pair.status === 'removed' ? 'Removed sheet: only in the old issue' : pair.old?.bad && pair.neu?.bad ? 'Neither file of this sheet could be read' : 'Only one issue of this sheet could be read'}</span>
@@ -432,7 +435,8 @@ export function Results() {
               {c.todo > 0 && <button className="btn sm primary" onClick={startReview} title="Open the first sheet still to review (Enter)">Start review <span className="n">{c.todo}</span></button>}
             </>
           )}
-          <button className={'btn sm icon panelbtn' + (st.panels.right ? '' : ' on')} onClick={() => togglePanel('right')} title={(st.panels.right ? 'Hide' : 'Show') + ' the details ( ] )'}><Icon n="panelright" size={16} /></button>
+          </HScroll>
+          <button className={'btn sm icon panelbtn' + (st.panels.drawings.right ? '' : ' on')} onClick={() => togglePanel('drawings', 'right')} title={panelTip('right', st.panels.drawings.right)}><Icon n="panelright" size={16} /></button>
         </div>
         {pair ? <Viewer pair={pair} mode={mode} fade={fade} flicker={flicker} onMode={setMode} next={nextUp(pair)} /> : <Overview list={list} pre={pre} onSelect={select} />}
         <div className="legend">
@@ -454,11 +458,11 @@ export function Results() {
           <button className="linkbtn keysbtn" onClick={() => { ui.keys = true; bump(); }} title="All keyboard keys (?)"><Icon n="keyboard" size={14} /> Keys</button>
         </div>
       </main>
-      {st.panels.right && (
+      <SidePanel side="right" p={pn.right}>
         <aside className="right">
           <SheetPanel pair={pair} onReviewed={markReviewed} onStart={startReview} />
         </aside>
-      )}
+      </SidePanel>
       {st.keys && <KeysDlg onClose={() => { ui.keys = false; bump(); }} />}
     </div>
   );
@@ -480,7 +484,7 @@ function KeysDlg({ onClose }: { onClose: () => void }) {
   const groups: [string, [string, string][]][] = [
     ['Going through the changes', [['N  or  →', 'next change - after the last one the sheet is ticked off as reviewed (all its changes seen) and the next sheet to review opens. On sheets with bigger changes the tiny ones come last, after one stop (switch: above the list of changes)'], ['P  or  ←', 'previous change'], ['R', 'tick the sheet off now and go on to the next one to review (again: untick)'], ['J / K  or  ↓ / ↑', 'next / previous sheet in the list'], ['Shift+J / Shift+K', 'next / previous changed sheet'], ['Enter', 'start the review (from the overview)'], ['Esc', 'whole sheet; again: back to the overview']]],
     ['Looking', [['O', 'overlay: removed red, added blue'], ['S', 'side by side'], ['1 / 2', 'the old / the new issue alone'], ['F', 'flicker: old and new in turn'], ['H', 'highlight: a faint fill in the change boxes'], ['0', 'whole sheet'], ['+ / -', 'zoom in / out (or the mouse wheel; drag to move)']]],
-    ['Room on screen', [['[', 'hide / show the sheet list'], [']', 'hide / show the details'], ['?', 'this list']]],
+    ['Room on screen', [['[', 'hide / show the list (or its tab at the edge)'], [']', 'hide / show the details'], ['Drag an edge', 'make the list or the details wider or narrower - double-click it for the normal width'], ['?', 'this list']]],
   ];
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -603,6 +607,7 @@ function SheetPanel({ pair, onReviewed, onStart }: { pair: Pair | null; onReview
             <span>{c.todo} sheet{c.todo === 1 ? '' : 's'} to review{busy ? ' so far' : ''}: changed, new, removed and any that could not be compared. Press <b>N</b> to go from change to change - a sheet whose changes you have all seen is ticked off and the next one opens. <b>R</b> ticks a sheet off at once.</span>
           </div>
         ) : c.done > 0 && !c.pending ? <div className="infobox"><Icon n="check" size={15} /> {c.ticked ? `Every sheet to review is ticked off (${c.ticked}).` : 'Nothing to review: no sheet changed, came or went, and every file could be read.'}</div> : null}
+        {s.phase === 'stopped' && s.note?.startsWith('Stopped:') && <div className="warnbox"><Icon n="info" size={15} /> {s.note}</div>}
         {c.pending > 0 && s.phase === 'stopped' && <div className="warnbox"><Icon n="info" size={15} /> Stopped: {c.pending} sheet{c.pending === 1 ? ' is' : 's are'} not compared yet ("Go on", bottom left). Nothing about {c.pending === 1 ? 'it' : 'them'} is known.</div>}
         <SummaryTable c={c} />
         <ExportBox />

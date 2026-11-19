@@ -2,6 +2,30 @@
 
 What changed in each version of Rev Radar (the same notes the app shows after an update).
 
+## 0.6.0
+
+### New features
+
+- All three tabs: drag the edge of the list or of the details to make it wider or narrower (double-click for the normal width) - the width is remembered for each tab
+- All three tabs: hide or show the list with [ and the details with ], or with the tab on the panel's edge - a hidden panel leaves a thin strip to bring it back
+- BOQ and Documents, side by side: drag the line between old and new to give one issue more room (double-click for equal halves)
+- BOQ, Documents and the PDF export: a line says what is being done and for how long, with Stop - after Stop the two issues are still chosen; a stopped export saves nothing
+
+### Faster and lighter
+
+- Drawings: a sheet of millions of lines is made ready in about half the time the first time it is read (measured on a test sheet)
+- Drawings: after a very heavy sheet the memory comes back as you move on to the next sheets - on the test set the app held about 0.6 GB where 0.5.1 held 2 GB
+
+### Fixes
+
+- Drawings: the sheet number and title are read from a title block crowded with notes and legend lines
+- Drawings: in a set where some sheet numbers come twice, the other sheets are still paired by number if they are also alike
+- Drawings: bill of quantities pages among the drawings are listed as BOQ pages - an amount was taken for a sheet number
+- Documents: a table row split over a page break is read as one row when the other issue has it whole - it was shown as changed
+- All three tabs: on a narrow window no tool is hidden any more - the tools bar scrolls sideways
+- BOQ: the panel and the register's Summary show the same lines, pictures included
+
+
 ## 0.5.1
 
 ### New features

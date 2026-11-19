@@ -1,8 +1,8 @@
 // The BOQ tab: a comparison of two issues of a bill of quantities (engine: boqCompare), the list
 // of what changed made from it, ticks, and the Excel change register.
-import { ui, bump, toast, plainError } from './model';
+import { ui, bump, toast, plainError, kept } from './model';
 import { rr, type FileItem } from './api';
-import { workers } from './engines';
+import { workers, freshJobEngine, closeJobEngine } from './engines';
 import { fileArg } from '../engine/rpc';
 import type { BoqItem, BoqPair, BoqResult } from '../engine/boq';
 import { pairMeta } from '../engine/boq';
@@ -11,7 +11,7 @@ import type { BoqPic } from '../engine/picdiff';
 import { PIC_LABEL } from '../engine/docs';
 import { wordDiff, norm } from '../engine/boq';
 import { writeXlsx, type XCell } from './xlsxwrite';
-import { ocrScans } from './ocr';
+import { ocrScans, stopOcr } from './ocr';
 
 /** scanned pages the engine found: read by OCR here, then compared again with their words */
 export interface ScanInfo { key: string; name: string; side: 'o' | 'n'; idx: number; pages: { i: number; w: number; h: number }[] }
@@ -54,16 +54,20 @@ export interface BoqSession {
   run: number;
   /** what it is doing while running ("Reading scanned pages (OCR): 3 of 12") */
   note?: string;
+  /** when the run started (performance.now) - the busy line counts from it */
+  t0?: number;
 }
 
 let runId = 0;
 export async function startBoq(oldSet: BoqSet, newSet: BoqSet, partial = false) {
   flushTicks();
   const my = ++runId;
-  ui.boq = { oldSet, newSet, phase: 'running', partial, entries: [], sel: -1, filter: 'changes', search: '', chip: 'all', ticked: ui.boq && ui.boq.oldSet.paths.join() === oldSet.paths.join() && ui.boq.newSet.paths.join() === newSet.paths.join() ? ui.boq.ticked : new Set(), run: my };
+  ui.boq = { oldSet, newSet, phase: 'running', partial, entries: [], sel: -1, filter: 'changes', search: '', chip: 'all', ticked: ui.boq && ui.boq.oldSet.paths.join() === oldSet.paths.join() && ui.boq.newSet.paths.join() === newSet.paths.join() ? ui.boq.ticked : new Set(), run: my, t0: performance.now() };
   bump();
   try {
-    const c = workers.reduce((a, b) => (b.busy < a.busy ? b : a), workers[0]);
+    // on an engine of its own, ended after the run: Stop ends exactly that one (T23)
+    const c = await freshJobEngine('boq');
+    if (my !== runId || !ui.boq) return;
     const side = (s: BoqSet) => s.files.map((f) => ({ file: fileArg(f.path), name: f.rel.split(/[\\/]/).pop() || f.rel }));
     let r = await c.call<BoqSession['result'] & { scans?: ScanInfo[] }>('boqCompare', [side(oldSet), side(newSet), { partial }]);
     if (my !== runId || !ui.boq) return;
@@ -86,12 +90,31 @@ export async function startBoq(oldSet: BoqSet, newSet: BoqSet, partial = false) 
     if (my !== runId || !ui.boq) return;
     ui.boq.phase = 'error';
     ui.boq.error = plainError(e, 'a file');
+  } finally {
+    // (a newer run - "Try again", the changed-pages box - has an engine of its own by now: not this one's to end)
+    if (my === runId) void closeJobEngine('boq');
   }
   bump();
 }
-export function leaveBoq() { flushTicks(); runId++; ui.boq = null; bump(); }
+/** Stop (T23): the engine and the OCR pass end, nothing is kept, and the start screen comes back with the
+ *  two issues still chosen */
+export function stopBoq() {
+  const s = ui.boq;
+  if (!s || s.phase !== 'running') return;
+  runId++;
+  if (ui.docs?.phase !== 'running' && !ui.docs?.picReading) void stopOcr();
+  void closeJobEngine('boq');
+  kept.boq = { old: { paths: s.oldSet.paths, files: s.oldSet.files }, neu: { paths: s.newSet.paths, files: s.newSet.files }, partial: s.partial };
+  ui.boq = null;
+  toast('Stopped - the two issues are still chosen', undefined, 5000);
+  bump();
+}
+export function leaveBoq() {
+  flushTicks();
+  if (ui.boq?.phase === 'running') { runId++; if (ui.docs?.phase !== 'running' && !ui.docs?.picReading) void stopOcr(); void closeJobEngine('boq'); }
+  runId++; ui.boq = null; bump();
+}
 
-/** the list: changed items (a heading reworded over several items: one line), added, removed */
 export function entriesOf(r: BoqResult): BoqEntry[] {
   const O = r.old.items, N = r.neu.items;
   const out: BoqEntry[] = [];
@@ -153,7 +176,7 @@ export function matches(e: BoqEntry, f: BoqFilter, s: BoqSession): boolean {
     case 'removed': return e.kind === 'removed';
     case 'moved': return !!e.pair?.moved;
     case 'renumbered': return !!e.pair?.renumbered && e.kind !== 'heading';
-    case 'check': return e.kind !== 'renumbered' && needsCheck(e, s);
+    case 'check': return e.kind !== 'renumbered' && (e.kind === 'heading' ? checkCount(e, s) > 0 : needsCheck(e, s)); // (T30: a heading by its items)
     case 'todo': return e.kind !== 'renumbered' && !s.ticked.has(e.k);
   }
 }
@@ -193,7 +216,23 @@ export function boqFigureText(e: BoqEntry): string {
  *  the one place the counts (chips, To review, summary, register) are made from */
 export const itemCount = (e: BoqEntry): number => (e.kind === 'heading' ? e.items!.length : 1);
 /** the items in the entries a filter shows (the chips on the left, "to review") */
-export const boqCount = (s: BoqSession, f: BoqFilter): number => s.entries.reduce((n, e) => n + (matches(e, f, s) ? itemCount(e) : 0), 0);
+/** (0.6.0 T30) the count lines - the same on the panel and in the register's Summary; they add up to its Changes rows */
+export function countLines(s: BoqSession): [string, number][] {
+  const r = s.result!;
+  const pics = s.entries.filter((e) => e.kind === 'pic').length;
+  return [['Changed', boqChanged(s.entries)], ['Added', r.added.length], ['Removed', r.removed.length],
+    // ("only": an item renumbered and changed is a change - the Renumbered filter shows both)
+    ['Renumbered only', s.entries.filter((e) => e.kind === 'renumbered').length],
+    // (pictures are rows of the Changes sheet too: their own line, so the lines add up to the rows - sweep)
+    ...(pics ? [['Pictures changed, added or removed', pics] as [string, number]] : [])];
+}
+export const boqCount = (s: BoqSession, f: BoqFilter): number => s.entries.reduce((n, e) => n + (f === 'check' ? checkCount(e, s) : matches(e, f, s) ? itemCount(e) : 0), 0);
+/** (0.6.0 T30) the items of an entry that need a check, as the register marks them: a heading entry's one by one */
+function checkCount(e: BoqEntry, s: BoqSession): number {
+  if (e.kind === 'renumbered') return 0;
+  if (e.kind !== 'heading' || !e.items) return needsCheck(e, s) ? 1 : 0;
+  return e.items.filter((p) => needsCheck({ ...e, o: s.result?.old.items[p.o], n: s.result?.neu.items[p.n], pair: p }, s)).length;
+}
 /** the changed items (a heading reworded counts its items) - the summary's "Changed" */
 export const boqChanged = (entries: BoqEntry[]): number => entries.reduce((n, e) => n + (e.kind === 'changed' || e.kind === 'heading' ? itemCount(e) : 0), 0);
 
@@ -316,11 +355,7 @@ export async function exportBoqExcel() {
   const sum: XCell[][] = [
     [H('BOQ comparison'), ''], ['Old issue', s.oldSet.paths.join('; ')], ['New issue', s.newSet.paths.join('; ')],
     ['Items in the old issue', r.old.items.length], ['Items in the new issue', r.neu.items.length],
-    ['Changed', boqChanged(s.entries)], ['Added', r.added.length], ['Removed', r.removed.length],
-    // ("only": an item renumbered and changed is a change - the Renumbered filter shows both)
-    ['Renumbered only', s.entries.filter((e) => e.kind === 'renumbered').length],
-    // (pictures are rows of the Changes sheet too: their own line, so the lines add up to the rows - sweep)
-    ...(s.entries.some((e) => e.kind === 'pic') ? [['Pictures changed, added or removed', s.entries.filter((e) => e.kind === 'pic').length] as XCell[]] : []),
+    ...countLines(s),
     // (T15: every item has its own row, so the rows of the Changes sheet = the chip + the renumbered)
     ['Rows in Changes = changes + renumbered only', rows.length - 1],
     ...(s.partial ? [['Not in the pages issued', r.outside.length] as XCell[]] : []),

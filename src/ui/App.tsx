@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ui, bump, useUI, DEFAULTS, toast, type Settings } from './model';
 import { rr } from './api';
 import { Icon, Logo } from './icons';
@@ -7,13 +7,30 @@ import { Results } from './Results';
 import { startEngines, engineCount, workers } from './engines';
 import { poolStarted } from './viewpool';
 import { startSession, leave, tickKey } from './runner';
-import { exportExcel, exportPdf } from './exporting';
+import { exportExcel, exportPdf, exportJob } from './exporting';
+import { BusyLine, soFar } from './busy';
+import type { ViewStuck } from './engines';
 import { UpdateCard, UpdateSettings } from './Update';
 import { BoqResults } from './Boq';
 import { leaveBoq, exportBoqExcel } from './boqrun';
 import { DocsResults } from './Docs';
 import { leaveDocs, exportDocsExcel } from './docsrun';
 import { HelpSettings, ReportDlg, CountAsk, PrivacySettings, LicencesDlg } from './Privacy';
+import { readPanels } from './panels';
+
+/** the view notice (T23, DECISIONS 118, 120): its time counts on, like the busy line */
+function StuckLine({ v, onKeep, onRestart }: { v: ViewStuck; onKeep: () => void; onRestart: () => void }) {
+  const since = useMemo(() => performance.now() - v.ms, [v]);
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => { const t = setInterval(() => setNow(performance.now()), 1000); return () => clearInterval(t); }, []);
+  return (
+    <div className="stuckline" role="alert">
+      <span>The sheet is taking a long time to draw - {soFar(now - since)} so far. A very large drawing can take a minute or two.</span>
+      <button className="btn sm" onClick={onKeep}>Keep waiting</button>
+      <button className="btn sm" onClick={onRestart} title="Stops the picture being drawn and starts the viewer again - nothing you have compared is lost">Restart the view</button>
+    </div>
+  );
+}
 
 export function App() {
   const st = useUI();
@@ -33,7 +50,7 @@ export function App() {
         ui.settings = { ...DEFAULTS, ...(s.compare || {}) };
         ui.theme = s.theme === 'dark' ? 'dark' : 'light';
         ui.listMode = s.listMode === 'grid' ? 'grid' : 'rows';
-        if (s.panels && typeof s.panels === 'object') ui.panels = { left: s.panels.left !== false, right: s.panels.right !== false };
+        ui.panels = readPanels(s.panels);
         if (typeof s.skipTiny === 'boolean') ui.skipTiny = s.skipTiny;
         if (typeof s.highlight === 'boolean') ui.highlight = s.highlight;
         document.documentElement.dataset.theme = ui.theme;
@@ -46,6 +63,17 @@ export function App() {
         bump();
       } catch (e) { setErr(String((e as Error)?.message || e)); }
     })();
+  }, []);
+
+  // a view engine that has not answered for 90 s (T23): said over the sheet; never restarted unasked - a blended
+  // A0 can honestly take a minute. "Keep waiting" is asked again when the call has run twice as long (engines.ts).
+  const [stuckView, setStuckView] = useState<ViewStuck | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => setStuckView((e as CustomEvent<ViewStuck>).detail);
+    const over = (e: Event) => setStuckView((v) => (v && v.engine === (e as CustomEvent<string>).detail ? null : v));
+    window.addEventListener('rr-view-stuck', on);
+    window.addEventListener('rr-view-stuck-over', over);
+    return () => { window.removeEventListener('rr-view-stuck', on); window.removeEventListener('rr-view-stuck-over', over); };
   }, []);
 
   const b = st.boq, d = st.docs;
@@ -104,6 +132,14 @@ export function App() {
         <button className="tb-btn" onClick={() => { ui.theme = ui.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = ui.theme; void rr.setTheme(ui.theme); void rr.setSettings({ theme: ui.theme }); bump(); }} title="Light / dark"><Icon n={st.theme === 'dark' ? 'sun' : 'moon'} size={16} /></button>
         <button className="tb-btn" onClick={() => setSettingsOpen(true)} title="Settings"><Icon n="settings" size={16} /></button>
       </header>
+      {(exportJob.cur || stuckView) && (
+        <div className="floatline">
+          {exportJob.cur && <BusyLine what={exportJob.cur.what} since={exportJob.cur.t0} onStop={exportJob.cur.stop} stopTitle="Stop writing the PDF - nothing is saved" />}
+          {stuckView && (
+            <StuckLine v={stuckView} onKeep={() => setStuckView(null)} onRestart={() => { const v = stuckView; setStuckView(null); v.restart(); }} />
+          )}
+        </div>
+      )}
       <div className="sheet">
         {err && <div className="empty"><h3>The engine did not start</h3><p>{err}</p></div>}
         {!err && !ready && <div className="empty"><span className="dot busy" /> Starting…</div>}

@@ -1,12 +1,12 @@
 // The Documents tab: two issues of specifications / documents compared (engine: docsCompare), the
 // list made from it, ticks, and the Excel change register.
-import { ui, bump, toast, plainError } from './model';
+import { ui, bump, toast, plainError, kept } from './model';
 import { rr, type FileItem } from './api';
-import { workers } from './engines';
+import { workers, freshJobEngine, closeJobEngine } from './engines';
 import { fileArg } from '../engine/rpc';
 import { DOC_CLASS_LABEL, PIC_LABEL, headPath, type DocEntry, type DocLine, type DocsResult, type DocsReading, type Fig } from '../engine/docs';
 import { picRead } from '../engine/picread';
-import { ocrRegions } from './ocr';
+import { ocrRegions, stopOcr } from './ocr';
 import type { EngineClient } from '../engine/rpc';
 import { setSigs, keptTicks, droppedNote, readScans, type ScanInfo, type Sigs } from './boqrun';
 import { writeXlsx, type XCell } from './xlsxwrite';
@@ -23,6 +23,8 @@ export interface DocSession {
   ticked: Set<string>;
   /** what it is doing while running */
   note?: string;
+  /** when the run started (performance.now) - the busy line counts from it */
+  t0?: number;
   /** (6.5b) pictures being read by OCR; how long it took */
   picReading?: boolean; picReadMs?: number;
   /** (T7) the Word files that were turned into PDFs (by place in the set): the PDF in the temp folder - what is
@@ -55,7 +57,7 @@ async function convertWord(oldSet: DocSet, newSet: DocSet, live: () => boolean, 
     // (switched off - RR_OFF=docxpdf: Word files are read as text, as in 0.5.0 - nothing to say)
     if (r && !r.ok && (r as { off?: boolean }).off) { note(''); return { conv, lines: [] }; }
     const name = t.f.rel.split(/[\\/]/).pop() || t.f.rel;
-    if (r?.ok) { conv[t.side][t.idx] = r.pdf; read.push({ side: t.side, name, pages: true, how: `shown as pages (${r.by === 'earlier' ? 'converted earlier' : r.by})` }); }
+    if (r?.ok) { conv[t.side][t.idx] = r.pdf; read.push({ side: t.side, name, pages: true, how: `shown as pages (${r.earlier || r.by === 'earlier' ? (r.by === 'earlier' ? 'converted earlier' : `converted earlier by ${r.by}`) : r.by})` }); }
     else read.push({ side: t.side, name, pages: false, how: `shown as text as read, not as pages - ${r && !r.ok ? r.why : 'the converter could not be asked'}` });
   }
   const lines: string[] = [];
@@ -87,14 +89,16 @@ let runId = 0;
 export async function startDocs(oldSet: DocSet, newSet: DocSet) {
   flushTicks();
   const my = ++runId;
-  ui.docs = { oldSet, newSet, phase: 'running', sel: -1, filter: 'changes', search: '', chip: 'all', ticked: new Set() };
+  ui.docs = { oldSet, newSet, phase: 'running', sel: -1, filter: 'changes', search: '', chip: 'all', ticked: new Set(), t0: performance.now() };
   bump();
   try {
-    const c = workers.reduce((a, b) => (b.busy < a.busy ? b : a), workers[0]);
     // (Word files first: turned into PDFs where a converter is - then they are compared and shown as PDFs)
     const { conv, lines } = await convertWord(oldSet, newSet, () => my === runId && !!ui.docs, (t) => { if (my === runId && ui.docs) { ui.docs.note = t; bump(); } });
     if (my !== runId || !ui.docs) return;
     ui.docs.conv = conv; ui.docs.wordLines = lines; ui.docs.wordNote = lines.join('; '); ui.docs.note = '';
+    // on an engine of its own, ended after the run: Stop ends exactly that one (T23)
+    const c = await freshJobEngine('docs');
+    if (my !== runId || !ui.docs) return;
     const side = (s: DocSet, tag: 'o' | 'n') => s.files.map((f, idx) => ({ file: fileArg(conv[tag][idx] ?? f.path), name: f.rel.split(/[\\/]/).pop() || f.rel }));
     let r = await c.call<DocsResult & { scans?: ScanInfo[] }>('docsCompare', [side(oldSet, 'o'), side(newSet, 'n')]);
     if (my !== runId || !ui.docs) return;
@@ -112,12 +116,29 @@ export async function startDocs(oldSet: DocSet, newSet: DocSet) {
     ui.docs.phase = 'done';
     ui.docs.sel = r.entries.findIndex((e) => e.kind !== 'renumbered');
     void rememberDocs(ui.docs);
-    if (r.picOcr) void readPictures(c, ui.docs, () => my === runId && !!ui.docs);
+    // (the pictures' OCR goes on after the result is shown, on a comparing engine - the run's own is ended below)
+    if (r.picOcr) void readPictures(workers.reduce((a, b) => (b.busy < a.busy ? b : a), workers[0]), ui.docs, () => my === runId && !!ui.docs);
   } catch (e) {
     if (my !== runId || !ui.docs) return;
     ui.docs.phase = 'error';
     ui.docs.error = plainError(e, 'a file');
+  } finally {
+    // (a newer run has an engine of its own by now: not this one's to end)
+    if (my === runId) void closeJobEngine('docs');
   }
+  bump();
+}
+/** Stop (T23): the engine and the OCR pass end, nothing is kept, and the start screen comes back with the
+ *  two issues still chosen */
+export function stopDocs() {
+  const s = ui.docs;
+  if (!s || s.phase !== 'running') return;
+  runId++;
+  if (ui.boq?.phase !== 'running') void stopOcr();
+  void closeJobEngine('docs');
+  kept.docs = { old: { paths: s.oldSet.paths, files: s.oldSet.files }, neu: { paths: s.newSet.paths, files: s.newSet.files } };
+  ui.docs = null;
+  toast('Stopped - the two issues are still chosen', undefined, 5000);
   bump();
 }
 /** at most this many pictures' boxes read by OCR a compare (6.5b): beyond, flag and boxes only */
@@ -150,7 +171,11 @@ async function readPictures(c: EngineClient, s: DocSession, live: () => boolean)
   s.picReadMs = Math.round(performance.now() - t0);
   bump();
 }
-export function leaveDocs() { flushTicks(); runId++; ui.docs = null; bump(); }
+export function leaveDocs() {
+  flushTicks();
+  if (ui.docs?.phase === 'running') { runId++; if (ui.boq?.phase !== 'running') void stopOcr(); void closeJobEngine('docs'); }
+  runId++; ui.docs = null; bump();
+}
 
 /** a tick kept by what it is on (file, page, clause, words), not by its place in the list */
 const line = (x?: DocLine) => (x ? `${x.file}#${x.page}#${x.num}#${x.text.slice(0, 80)}` : '');

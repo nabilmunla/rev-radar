@@ -7,11 +7,31 @@ type Pending = { res: (v: unknown) => void; rej: (e: Error) => void; method: str
 export const slowCalls: { engine: string; method: string; ms: number; at: number }[] = [];
 (globalThis as { __rrSlow?: unknown }).__rrSlow = slowCalls;
 
+/** what the call that hung fails with when its engine was ended for not answering (T23; `hung` on the error: the call's id).
+ *  The words are the Engineer's (DECISIONS 120): no engine, no restart - that is the app's business; with the file known, its name. */
+export const hungText = (file?: string): string => file
+  ? `"${file}" gave no answer for 6 minutes and reading it was stopped (a damaged or extremely heavy file can do this). Start again - if it stops at the same file, take that file out and compare the rest.`
+  : 'A file gave no answer for 6 minutes and reading it was stopped (a damaged or extremely heavy file can do this). Start the comparison again.';
+export const HUNG_TEXT = hungText();
+export const isHung = (e: unknown) => !!e && typeof e === 'object' && typeof (e as { hung?: number }).hung === 'number';
+/** the same hung error, naming the file the caller knows it was reading (fingerprint, info) */
+export const hungFile = (e: unknown, file: string): Error => Object.assign(new Error(hungText(file)), { hung: (e as { hung: number }).hung, engineRestarted: true });
+
 /** an engine's answer to a call a newer one in its lane made pointless (see EngineClient.call) */
 export const SUPERSEDED = 'superseded';
 
 /** an engine's answer when a file stopped reading part way (network drive, file replaced) */
 export const READ_FAIL = 'The file could not be read completely (network drive dropped, or the file was changed or replaced meanwhile). Try again.';
+
+/** calls that are long jobs by design (T23, DECISIONS 96): no limit - a 3,000-page book with OCR is honest
+ *  work. The window shows them a busy line with the time so far and Stop instead (BOQ, Documents, the export).
+ *  `docsReading` is not one (M2-4, DECISIONS 119b): it reads one file the app wrote and has no Stop. */
+const LONG_JOBS = /^(?:boqCompare|docsCompare|exportPdf)$/;
+/** how long a call may run before its engine is said not to answer (ms): 6 minutes for a comparing engine
+ *  (the Drawings watchdog's limit), never for the long jobs (Infinity = no limit) */
+export function hangLimit(method: string, ms = 6 * 60_000): number {
+  return LONG_JOBS.test(method) ? Infinity : ms;
+}
 
 /** a file made or read by an engine */
 export interface FileRef { $file: { path: string; size?: number; delta?: string; mtime?: number } }
@@ -29,13 +49,41 @@ export class EngineClient {
   restarts = 0;
   constructor(public name: string) {}
 
+  /** when the engine last answered anything (or was attached): the call it is running started no
+   *  earlier than this - what it queued behind has just ended */
+  private answeredAt = 0;
+  /** set by the window when it ends this engine for not answering (T23): the id of the call that hung (`stuck().id`) -
+   *  only that call fails with the hung text, the others the engine had taken fail as a plain restart (M2-3) */
+  hung: number | null = null;
+
+  /**
+   * The call the engine is running now and for how long (T23), or null when it is idle or has no
+   * engine: the oldest call it has taken (an engine does one call at a time, in order), timed from when
+   * it last answered if that is later than the call was asked for.
+   */
+  stuck(now = performance.now()): { id: number; method: string; ms: number } | null {
+    if (!this.port) return null;
+    for (const [id, p] of this.pending) if (p.sent) return { id, method: p.method, ms: now - Math.max(p.t0, this.answeredAt, this.timedFrom) };
+    return null;
+  }
+
+  /** the time of every call it is running starts again at `now` (M2-5, DECISIONS 119c: the PC slept - the clock
+   *  went on, the engine did not) */
+  private timedFrom = 0;
+  timeAgain(now = performance.now()) { this.timedFrom = now; }
+
   attach(port: MessagePort, restarted: boolean) {
+    this.answeredAt = performance.now();
     if (restarted) {
       this.restarts++;
       // calls the old engine had taken fail (one of them may be what brought it down); calls
       // still waiting for an engine go to the new one
-      const err = new Error(this.name + ' restarted');
-      for (const [id, p] of this.pending) if (p.sent) { this.pending.delete(id); this.busy--; p.rej(err); }
+      const why = this.hung;
+      this.hung = null;
+      for (const [id, p] of this.pending) if (p.sent) {
+        this.pending.delete(id); this.busy--;
+        p.rej(id === why ? Object.assign(new Error(HUNG_TEXT), { hung: id, engineRestarted: true }) : new Error(this.name + ' restarted'));
+      }
     }
     this.port?.close();
     this.dying?.close();
@@ -76,6 +124,7 @@ export class EngineClient {
     if (d.notice) { if (d.notice === 'recycling') this.hold(); this.onNotice?.(d.notice); return; }
     const p = this.pending.get(d.id);
     if (!p) return;
+    this.answeredAt = performance.now();
     // the engine was restarting when this call reached it: send it again to the new one
     if (!d.ok && d.retry) { this.hold(); p.sent = false; this.waiting.push({ id: d.id, msg: p.msg }); return; }
     this.pending.delete(d.id);

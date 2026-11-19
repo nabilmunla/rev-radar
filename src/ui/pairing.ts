@@ -209,7 +209,7 @@ export interface Fingerprint { ref: SheetRef; words: string[] }
  * words - drawing number, title, room names - pair; the title block every sheet carries
  * cancels out.
  */
-export function pairByContent(olds: Fingerprint[], news: Fingerprint[], minScore = 0.35, bySheet: [number, number][] = []): { pairs: PairPlan[]; olds: SheetRef[]; news: SheetRef[] } {
+export function pairByContent(olds: Fingerprint[], news: Fingerprint[], minScore = 0.35, bySheet: [number, number, boolean?][] = []): { pairs: PairPlan[]; olds: SheetRef[]; news: SheetRef[] } {
   // single sheets whose file names carry different drawing numbers: typical floors read alike
   // (GA L04 / GA L09) - only a near copy is the same sheet renumbered
   const nameNo = (r: SheetRef) => (r.pages === 1 ? drawingNoBare(drawingNo(baseName(r.rel))) : '');
@@ -257,19 +257,21 @@ export function pairByContent(olds: Fingerprint[], news: Fingerprint[], minScore
   };
   // the pages paired by the sheet number read off them (T11, DECISIONS 76) - first, unless what the
   // pages say contradicts it: the two score under 0.35 while one of them has another partner at 0.8
-  // or more (a false number on a spec page). The words are scored over all the pages either way, so
-  // the content pairing of the rest is as without them.
+  // or more (a false number on a spec page). A number read at a spot whose numbers repeat (a set holding
+  // some sheets twice; third value, 0.6.0 DECISIONS 93) needs the 0.35 itself: that spot is the weaker
+  // proof. The words are scored over all the pages either way, so the content pairing of the rest is as
+  // without them.
   if (bySheet.length) {
     const score = new Map<number, number>(), bestO = new Map<number, [number, number][]>(), bestN = new Map<number, [number, number][]>();
     for (const c of cand) {
       score.set(c.i * news.length + c.j, c.s);
       if (c.s >= 0.8) { (bestO.get(c.i) || bestO.set(c.i, []).get(c.i)!).push([c.j, c.s]); (bestN.get(c.j) || bestN.set(c.j, []).get(c.j)!).push([c.i, c.s]); }
     }
-    for (const [i, j] of bySheet) {
+    for (const [i, j, repeats] of bySheet) {
       if (usedO.has(i) || usedN.has(j)) continue;
       const s = score.get(i * news.length + j) ?? 0;
       const elsewhere = (bestO.get(i) || []).some(([k]) => k !== j) || (bestN.get(j) || []).some(([k]) => k !== i);
-      if (s < 0.35 && elsewhere) continue;
+      if (s < 0.35 && (repeats || elsewhere)) continue;
       take(i, j, 'sheet', s || undefined);
     }
   }

@@ -187,3 +187,13 @@ export function removeTemp(paths: string[]) {
 export function statOf(p: string): { size: number; mtime: number } | null {
   try { const s = fs.statSync(p); return { size: s.size, mtime: s.mtimeMs }; } catch { return null; }
 }
+
+/** (tests only - e2e-hang) RR_TEST_HANG=<folder>: a call that finds a file named after it in that folder takes the file
+ *  away and then never answers (a busy loop, like a damaged file that loops inside the engine). The test writes the
+ *  file when it wants one call to hang; nothing is set in a real run. */
+export function testHang(point: string): void {
+  const dir = process.env.RR_TEST_HANG;
+  if (!dir) return;
+  try { fs.unlinkSync(path.join(dir, point)); } catch { return; }
+  for (;;) { /* never ends */ }
+}

@@ -236,6 +236,7 @@ export function DocsSide({ s }: { s: DocSession }) {
   const n: Record<Chip, number> = { all: base.length, figs: base.filter((e) => !!e.figs?.length).length, todo: base.filter((e) => !s.ticked.has(e.k)).length };
   return (
     <SideView<DocLine>
+      tab="docs"
       chip={{ value: s.chip, set: (c) => { s.chip = c; bump(); }, n, ok: (e) => docChip(r.entries[e], s.chip, s), rev: s.ticked.size, what: s.chip === 'figs' ? 'only the changes in figures' : 'only the changes still to review' }}
       m={m} sel={s.sel} itemsOf={(e) => ({ o: r.entries[e].o, n: r.entries[e].n })} choose={(e) => { s.sel = e; bump(); }}
       ticked={(e) => s.ticked.has(r.entries[e].k)} titleOf={(mk) => explain(r.entries[mk.e])} idOf={(x) => x.i}

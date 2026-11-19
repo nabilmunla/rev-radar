@@ -216,9 +216,17 @@ ipcMain.handle('engines:add', (_e, name) => {
   spawnEngine(name, false, 0);
   return true;
 });
-ipcMain.handle('engines:stop', (_e, name) => {
+/** `discard` (T23, Stop of an export): the PDF files this run made - finished parts and a half-copied one - are
+ *  taken away once the engine has ended, with what it left in the temp folder: Stop leaves nothing behind */
+ipcMain.handle('engines:stop', async (_e, name, discard) => {
   const e = engines.get(name);
+  const pid = e && e.proc.pid;
   if (e) { engines.delete(name); try { e.proc.kill(); } catch (_) { /* gone */ } }
+  if (Array.isArray(discard) && discard.length) {
+    if (e) await new Promise((res) => { e.proc.once('exit', res); setTimeout(res, 3000); });
+    for (const f of discard) { const p = String(f); if (/\.pdf$/i.test(p)) try { fs.rmSync(p, { force: true }); } catch (_) { /* in use: left */ } }
+    try { const w = path.join(os.tmpdir(), APP, 'work'); if (pid) for (const n of fs.readdirSync(w)) if (n.startsWith(pid + '-')) fs.rmSync(path.join(w, n), { recursive: true, force: true }); } catch (_) { /* none */ }
+  }
   return true;
 });
 app.on('before-quit', () => { quitting = true; });

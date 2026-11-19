@@ -16,7 +16,7 @@ test('a merged record without its delta is thrown away; a failed merge leaves no
   const f = path.join(tmp, 'big.pdf');
   fs.writeFileSync(f, Buffer.alloc(10_500_000, 32)); // (not a PDF: the merge fails)
   const st = fs.statSync(f);
-  const key = crypto.createHash('sha1').update(`1|${f.toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 24);
+  const key = crypto.createHash('sha1').update(`2|${f.toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 24);
   fs.mkdirSync(heavyDir(), { recursive: true });
   const info = path.join(heavyDir(), key + '.json');
   fs.writeFileSync(info, JSON.stringify({ merged: 2, base: st.size, deltaSize: 1234 }));
@@ -33,7 +33,7 @@ test('a stale record that cannot be removed does not spin the engine: read as it
   const f = path.join(tmp, 'big2.pdf');
   fs.writeFileSync(f, Buffer.alloc(10_400_000, 32));
   const st = fs.statSync(f);
-  const key = crypto.createHash('sha1').update(`1|${f.toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 24);
+  const key = crypto.createHash('sha1').update(`2|${f.toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 24);
   fs.mkdirSync(heavyDir(), { recursive: true });
   const info = path.join(heavyDir(), key + '.json');
   fs.writeFileSync(info, JSON.stringify({ merged: 1, base: st.size, deltaSize: 99 }));

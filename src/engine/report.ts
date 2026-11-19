@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as pf from './pdfium';
-import { VFile, tempPath, type FileSrc } from './files';
+import { VFile, tempPath, testHang, type FileSrc } from './files';
 
 export interface ExportSheet {
   /** the new issue's file: opened only when its turn comes (one unreadable sheet doesn't stop the rest) */
@@ -311,8 +311,10 @@ export function textWidth(s: string, size: number, bold = false): number {
 /** column widths: every column gets what its widest text needs when it fits; the columns that
  *  don't fit share the rest equally (their texts are cut with "...") */
 export function colWidths(rows: string[][], total: number, size: number): number[] {
-  const n = Math.max(...rows.map((r) => r.length));
-  const need = Array.from({ length: n }, (_, i) => Math.max(...rows.map((r, k) => textWidth(r[i] || '', size, k === 0))) + 10);
+  // (loops, not Math.max(...rows): that throws past ~125,000 rows - 0.6.0 T24)
+  let n = 0;
+  for (const r of rows) if (r.length > n) n = r.length;
+  const need = Array.from({ length: n }, (_, i) => { let m = 0; rows.forEach((r, k) => { const v = textWidth(r[i] || '', size, k === 0); if (v > m) m = v; }); return m + 10; });
   const out = new Array<number>(n).fill(0);
   let open = need.map((_, i) => i), left = total;
   for (;;) {
@@ -366,6 +368,7 @@ function save(D: number, out: string): number {
     const ok = R.q.FPDF_SaveAsCopy(D, fw, 0);
     fs.closeSync(fd);
     if (!ok || failed) throw new Error('Could not write the PDF' + (failed ? ': ' + String(failed) : ''));
+    testHang('exportPdf.save'); // (tests only: RR_TEST_HANG - the finished part is in the temp folder, not yet in place)
     moveInto(part, out);
     return bytes;
   } catch (e) {
@@ -383,7 +386,7 @@ function moveInto(from: string, to: string) {
     const c = (e as NodeJS.ErrnoException).code;
     if (c !== 'EXDEV') throw busyHint(e);
   }
-  const p = to + '.part';
+  const p = to.replace(/\.pdf$/i, '') + '.part.pdf';
   try {
     fs.copyFileSync(from, p);
     fs.renameSync(p, to);

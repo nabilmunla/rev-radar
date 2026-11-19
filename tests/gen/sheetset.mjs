@@ -17,7 +17,7 @@ import { resolve } from 'node:path';
 const MM = 72 / 25.4;
 const mm = (v) => v * MM;
 const SIZES = { A1: [2384, 1684], A3: [1191, 842], A4: [595, 842] };
-const PROJECT = 'PRJ-2603';
+const PROJECT = 'PRJ-1234';
 const CLIENT = ['NORTHGATE DEVELOPMENTS', 'HARBOUR DESIGN STUDIO'];
 const n2 = (n) => (Math.abs(n) < 0.005 ? 0 : n).toFixed(2);
 const esc = (s) => s.replace(/[\\()]/g, '\\$&');

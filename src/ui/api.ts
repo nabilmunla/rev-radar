@@ -36,7 +36,7 @@ export interface RR {
   showInFolder(p: string): Promise<boolean>;
   tempPath(name: string): Promise<string>;
   /** a Word file as a PDF in the temp folder (Word on Windows, else LibreOffice); `why` when it could not be (`none`: no converter at all) */
-  docxConvert(p: string): Promise<{ ok: true; pdf: string; by: string; cached?: boolean } | { ok: false; why: string; none?: boolean }>;
+  docxConvert(p: string): Promise<{ ok: true; pdf: string; by: string; cached?: boolean; earlier?: boolean } | { ok: false; why: string; none?: boolean }>;
   cacheGet(k: string): Promise<{ json: any; thumb: Uint8Array } | null>;
   cachePreview(k: string): Promise<Uint8Array | null>;
   cachePut(k: string, json: unknown, thumb: Uint8Array, preview: Uint8Array): Promise<boolean>;
@@ -47,7 +47,7 @@ export interface RR {
   engineKill(name: string): Promise<boolean>;
   /** start an engine afresh (an old one of that name is closed), or close it for good */
   engineAdd(name: string): Promise<boolean>;
-  engineStop(name: string): Promise<boolean>;
+  engineStop(name: string, discard?: string[]): Promise<boolean>;
   /** a file being written (closing the window asks first), '' when done */
   busy(what: string): Promise<boolean>;
   pathOf(file: File): string;

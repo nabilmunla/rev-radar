@@ -4,6 +4,7 @@ import type { SheetRef, PairPlan } from './pairing';
 import type { FileItem } from './api';
 import type { TextChange } from '../engine/textdiff';
 import { isFigWord } from '../engine/figs';
+import { allShown } from './panels';
 
 export type Status = 'waiting' | 'running' | 'changed' | 'titleonly' | 'same' | 'identical' | 'new' | 'removed' | 'error';
 
@@ -104,8 +105,8 @@ export interface UIState {
   docs: import('./docsrun').DocSession | null;
   listMode: 'rows' | 'grid';
   toast: Toast[];
-  /** side panels shown (the drawing gets the room when they are hidden) */
-  panels: { left: boolean; right: boolean };
+  /** side panels shown, per tab (the drawing gets the room when they are hidden; panels.ts) */
+  panels: import('./panels').Shown;
   /** the keyboard keys sheet is open */
   keys: boolean;
   /** N shows tiny changes last on a sheet that has bigger ones too (remembered) */
@@ -115,12 +116,16 @@ export interface UIState {
 }
 export interface Toast { id: number; text: string; kind?: 'ok' | 'warn' | 'err'; action?: { label: string; run: () => void }; key?: string }
 
+/** the two sets a stopped BOQ / Documents run was started with: the start screen shows them chosen again (T23) */
+export interface KeptSets { old: { paths: string[]; files: FileItem[] }; neu: { paths: string[]; files: FileItem[] }; partial?: boolean }
+export const kept: { boq?: KeptSets; docs?: KeptSets } = {};
+
 let version = 0;
 const listeners = new Set<() => void>();
 export const ui: UIState = {
   session: null, selected: null, filter: 'all', search: '', area: -1, showCommon: false,
   settings: { ...DEFAULTS }, engines: 0, theme: 'light', listMode: 'rows', toast: [],
-  panels: { left: true, right: true }, keys: false, skipTiny: true, highlight: false,
+  panels: allShown(), keys: false, skipTiny: true, highlight: false,
   tab: 'drawings', boq: null, docs: null,
 };
 

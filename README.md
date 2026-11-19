@@ -23,7 +23,7 @@ on the right. Every sheet is paired with the same sheet of the other issue - by 
 file name or in its title block, or by the words on the sheet - and compared. You see at once which sheets changed and where: each change is boxed
 and numbered, removed lines in red, added in blue. Press **N** to go from change to change; a sheet
 is ticked off once you have seen all of it. Export a clouded PDF of the changed sheets, or an Excel
-list of every sheet.
+list of every sheet. After a very heavy sheet the memory comes back as you move on to the next sheets.
 
 ![Drawings tab: two issues of four sheets, the changed ground floor plan open](assets/readme/drawings.png)
 
@@ -32,7 +32,8 @@ list of every sheet.
 Drop two issues of a bill of quantities (Excel or PDF). Every item is paired wherever it went -
 another page, another bill - and you see what changed: quantities, units, rates, amounts and
 descriptions, items added, removed or moved. Old and new side by side; click a change on one side
-and the other side goes to it. Export the change register to Excel.
+and the other side goes to it. Drag the line between the two to give one issue more room. Export the
+change register to Excel.
 
 ![BOQ tab: two issues of a workbook side by side, changed items marked](assets/readme/boq.png)
 
@@ -44,10 +45,22 @@ compared as pages, as Word prints it: Microsoft Word or LibreOffice on the PC ma
 seconds a file). If neither can, its text is compared, and the app says which. Minor changes
 (renumbering, punctuation, a date) are told apart and can be hidden. Scanned pages are read with
 OCR. Pictures inside the pages are compared as pictures; the words inside a picture are not read.
+Old and new side by side, as in BOQ, with the same line to drag between them.
 
 ![Documents tab: two issues of a tiling specification side by side](assets/readme/documents.png)
 
 (The pictures are made from generated sample files.)
+
+### In every tab
+
+The list on the left and the details on the right are side panels. Drag a panel's edge to make it
+wider or narrower (double-click for the normal width); the width is remembered for each tab. Hide or
+show the list with **[** and the details with **]**, or with the tab on the panel's edge - a hidden
+panel leaves a thin strip to bring it back. On a narrow window the tools bar scrolls sideways; no
+tool is hidden.
+
+A long job - a compare or the PDF export - shows a line with what is being done, the time so far and
+**Stop**. After Stop the two issues are still chosen; a stopped export saves nothing.
 
 ## Updates
 

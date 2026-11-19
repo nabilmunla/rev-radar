@@ -68,6 +68,44 @@
 .results.noright { grid-template-columns: var(--lw) minmax(0, 1fr); }
 .results.noleft.noright { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1500px) { .results { --lw: 286px; --rw: 300px; } }
+/* side panels with the person's widths (T25: PanelSize.tsx, the widths come inline from panelLayout); a hidden one is a rail */
+.results.pw { grid-template-columns: var(--lw) minmax(0, 1fr) var(--rw); }
+.pw-wrap { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.pw-wrap > aside { flex: 1; min-height: 0; width: 100%; }
+.rail { position: relative; min-height: 0; background: var(--drawer); }
+.rail.left { border-right: 1px solid var(--border); }
+.rail.right { border-left: 1px solid var(--border); }
+.pw-edge { position: absolute; top: 0; bottom: 0; width: 6px; z-index: 7; cursor: col-resize; touch-action: none; }
+.pw-edge.right { right: 0; }
+.pw-edge.left { left: 0; }
+.pw-edge::after { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: transparent; transition: background 0.12s; }
+.pw-edge.right::after { right: 0; }
+.pw-edge.left::after { left: 0; }
+.pw-edge:hover::after, .pw-edge.on::after { background: var(--accent); }
+/* (T27) the line between the old and the new pane: 6 px wide, its drawn line in the middle of it */
+.pw-edge.mid { width: 6px; }
+.pw-edge.mid::after { left: 2px; }
+body.pw-dragging, body.pw-dragging * { cursor: col-resize !important; user-select: none !important; }
+/* the tab that hides a panel (on its inner edge) and brings it back (on its rail) */
+.pw-tab { position: absolute; top: 50%; transform: translateY(-50%); z-index: 8; width: 14px; height: 48px; padding: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid var(--border-strong); background: var(--paper); color: var(--text-3); }
+.pw-tab:hover { color: var(--accent-strong); background: var(--accent-soft); }
+.pw-tab.open.left { right: 0; border-right: 0; border-radius: 6px 0 0 6px; }
+.pw-tab.open.right { left: 0; border-left: 0; border-radius: 0 6px 6px 0; }
+.rail.left .pw-tab { left: 0; border-left: 0; border-radius: 0 6px 6px 0; }
+.rail.right .pw-tab { right: 0; border-right: 0; border-radius: 6px 0 0 6px; }
+/* strips that scroll sideways when too narrow (the viewer toolbar, the BOQ / Documents bar): arrows at their ends */
+.hscroll { position: relative; flex: none; display: flex; flex-direction: column; min-width: 0; }
+.hscroll > div { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.hscroll > div::-webkit-scrollbar { display: none; }
+.hscroll .hs-btn { position: absolute; top: 0; bottom: 1px; width: 26px; border: 0; cursor: pointer; z-index: 5; font-size: 20px; line-height: 1; color: var(--text); background: linear-gradient(to right, var(--hs-bg, var(--paper)) 55%, transparent); padding: 0; }
+.hscroll .hs-btn.l { left: 0; }
+.hscroll .hs-btn.r { right: 0; background: linear-gradient(to left, var(--hs-bg, var(--paper)) 55%, transparent); }
+.hscroll .hs-btn:hover { color: var(--accent-strong); }
+/* the viewer toolbar: the two panel buttons pinned at the ends, the tools between them scroll */
+.vtbar { display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--paper); min-height: 42px; flex: none; }
+.vtbar > .panelbtn { flex: none; }
+.vtbar > .hscroll.vtscroll { flex: 1 1 0; }
+.vtbar .vtoolbar { border-bottom: 0; padding: 6px 0; overflow-x: auto; }
 .left { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--drawer); }
 .right { border-left: 1px solid var(--border); min-height: 0; overflow: auto; background: var(--drawer); }
 .center { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
@@ -83,7 +121,7 @@
 .xbtn { border: 0; background: transparent; color: var(--text-3); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: 4px; }
 .xbtn:hover { color: var(--text); background: var(--surface-3); }
 .prefix { padding: 0 14px 4px; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.search { flex: 1; display: flex; align-items: center; gap: 6px; height: 30px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 0 8px; color: var(--text-3); }
+.search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 30px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 0 8px; color: var(--text-3); }
 .search input { border: 0; outline: 0; background: transparent; flex: 1; min-width: 0; color: var(--text); }
 .slist { flex: 1; min-height: 0; overflow: auto; padding: 0 6px 8px; }
 .slist.empty-list { color: var(--text-3); padding: 20px; text-align: center; }
@@ -125,7 +163,6 @@
 .btn .n { font-weight: 700; opacity: 0.85; margin-left: 2px; }
 @container (max-width: 900px) { .vtoolbar .lbl-opt, .ovhint, .legend .keyhint { display: none; } .fade input { width: 72px; } }
 @container (max-width: 700px) { .vtoolbar .lbl { display: none; } }
-@container (max-width: 560px) { .fade { display: none; } .legend span:not(.grow) { display: none; } }
 .vtoolbar .seg button { display: inline-flex; align-items: center; gap: 5px; }
 .btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
 .fade { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
@@ -146,7 +183,7 @@
 .ctxmenu .ctxhead { font-size: 11px; color: var(--text-3); padding: 4px 8px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 650; }
 .ctxmenu button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; text-align: left; }
 .ctxmenu button:hover { background: var(--surface-3); }
-.legend { display: flex; align-items: center; gap: 14px; padding: 4px 10px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; min-height: 27px; font-size: 11.5px; color: var(--text-2); border-top: 1px solid var(--border); background: var(--paper); flex-wrap: wrap; }
+.legend { display: flex; align-items: center; gap: 4px 14px; padding: 4px 10px; flex-wrap: wrap; white-space: nowrap; overflow: hidden; min-height: 27px; font-size: 11.5px; color: var(--text-2); border-top: 1px solid var(--border); background: var(--paper); flex-wrap: wrap; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .sw { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
 .sw.old { background: var(--old); } .sw.new { background: var(--new); } .sw.same { background: var(--same); opacity: 0.6; }
@@ -235,19 +272,10 @@
 .minimap rect.moved { fill: none; stroke: #2e6f95; stroke-dasharray: 3 2; }
 .minimap rect.moved.on { fill: rgba(46, 111, 149, 0.15); }
 .minimap rect.vp { fill: rgba(9, 48, 47, 0.07); stroke: #09302f; stroke-width: 1.6; }
-/* the toolbar measured too narrow for its words: they go, the icons stay */
-.vtoolbar[data-tight="1"] .lbl-opt, .vtoolbar[data-tight="2"] .lbl-opt, .vtoolbar[data-tight="3"] .lbl-opt { display: none; }
-.vtoolbar[data-tight="2"] .lbl, .vtoolbar[data-tight="3"] .lbl { display: none; }
-.vtoolbar[data-tight="3"] .fade, .vtoolbar[data-tight="4"] .fade { display: none; }
-/* the narrowest window: zoom by wheel / + - and flicker by F only */
-.vtoolbar[data-tight="4"] .lbl-opt, .vtoolbar[data-tight="4"] .lbl, .vtoolbar[data-tight="4"] .zoomseg, .vtoolbar[data-tight="4"] .flickerbtn, .vtoolbar[data-tight="4"] .hlbtn { display: none; }
-/* (a very narrow viewer - a small window with both side panels open: the change count shrinks,
-   then goes; N / P and the list on the right still say where you are) */
-.vtoolbar[data-tight="5"] .lbl-opt, .vtoolbar[data-tight="5"] .lbl, .vtoolbar[data-tight="5"] .zoomseg, .vtoolbar[data-tight="5"] .flickerbtn, .vtoolbar[data-tight="5"] .hlbtn, .vtoolbar[data-tight="5"] .fade,
-.vtoolbar[data-tight="6"] .lbl-opt, .vtoolbar[data-tight="6"] .lbl, .vtoolbar[data-tight="6"] .zoomseg, .vtoolbar[data-tight="6"] .flickerbtn, .vtoolbar[data-tight="6"] .hlbtn, .vtoolbar[data-tight="6"] .fade,
-.vtoolbar[data-tight="6"] .areanav .num { display: none; }
-.vtoolbar[data-tight="5"] .areanav .num { min-width: 0; padding: 0 2px; }
-.vtoolbar[data-tight="5"] .seg button, .vtoolbar[data-tight="6"] .seg button { padding-left: 7px; padding-right: 7px; }
+/* the toolbar measured too narrow for its words: they go, the icons stay (the optional words first); what still
+   does not fit scrolls sideways in the HScroll - no tool is hidden (T25, DECISIONS 98) */
+.vtoolbar[data-tight="1"] .lbl-opt, .vtoolbar[data-tight="2"] .lbl-opt { display: none; }
+.vtoolbar[data-tight="2"] .lbl { display: none; }
 .fname.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .reviewbar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
 .reviewbar > div { height: 100%; background: var(--accent); border-radius: 2px; }
@@ -305,10 +333,17 @@
 /* ---------------------------------------------------------------- BOQ side by side (0.4.2) */
 .boq-center.side { overflow: hidden; }
 .boq-partial { margin-left: auto; }
-.boq-bar { display: flex; align-items: center; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: 12.5px; flex: none; }
+.boq-bar { --hs-bg: var(--surface); display: flex; align-items: center; gap: 4px; padding: 5px 8px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: 12.5px; flex: none; }
+.boq-bar > .panelbtn { flex: none; }
+.boq-bar > .hscroll.boq-scroll { flex: 1 1 0; }
+/* the tools scroll sideways when they do not fit (T26): the count text shortens first, the buttons never go */
+.boq-tools { display: flex; align-items: center; gap: 12px; padding: 2px 4px; }
+.boq-tools > * { flex: none; }
+.boq-tools > .faint { flex: 0 1 auto; min-width: 6ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.boq-tools .check { white-space: nowrap; }
 .sbs { --mk-punct: #0f9d8a; --mk-dateOnly: #6f7f95; --mk-changed: var(--areac); --mk-moved: #8b5cf6; --mk-heading: #c9a227; --mk-renum: var(--text-3); --mk-added: var(--new); --mk-removed: var(--old); --mk-pic: #e8590c;
   flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.sbs-panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.sbs-panes { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .sbs-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
 .sbs-pane + .sbs-pane { border-left: 2px solid var(--border-strong); }
 .sbs-head { padding: 5px 10px; font-size: 12.5px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
@@ -359,7 +394,7 @@
 .sbs-legend i { display: inline-block; width: 14px; height: 11px; border-radius: 2px; background: color-mix(in srgb, var(--mk) 30%, transparent); box-shadow: inset 3px 0 0 var(--mk); }
 .sbs-legend i.minor { background: transparent; box-shadow: inset 2px 0 0 var(--mk); outline: 1px dashed var(--mk); outline-offset: -1px; }
 .sbs-legend .lg-sep { color: var(--text-3); font-size: 11px; margin-left: 4px; }
-.legend .dlegend { gap: 4px 14px; flex-wrap: nowrap; overflow: hidden; color: inherit; }
+.legend .dlegend { gap: 4px 14px; flex-wrap: wrap; overflow: hidden; color: inherit; }
 .legend .dlegend i.sw { width: 14px; height: 4px; border-radius: 2px; box-shadow: none; }
 .legend .dlegend i.sw.box { height: 9px; background: transparent; border: 1.6px solid var(--areac); border-radius: 3px; box-sizing: border-box; }
 .legend .dlegend i.sw.box.moved { border: 1.4px dashed #2e6f95; }
@@ -428,3 +463,10 @@
 .modal details.hint p { margin: 6px 0; }
 .anon-example { max-height: 220px; overflow: auto; font-size: 11px; background: var(--surface-2); padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
 .anon-example.licences { max-height: calc(100vh - 220px); font-size: 11.5px; }
+
+/* T23: the busy line of a long job (BOQ, Documents, the PDF export), and the line over the sheet when the view stops answering */
+.busyline { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.busyline .btext { color: var(--text); }
+.floatline { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 45; display: flex; flex-direction: column; gap: 8px; align-items: center; max-width: 640px; }
+.floatline .busyline, .floatline .stuckline { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; box-shadow: var(--shadow-lg); font-size: 12.5px; }
+.floatline .stuckline { display: flex; align-items: center; border-color: var(--warn); }

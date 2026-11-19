@@ -147,6 +147,9 @@ function makeConverter(d = {}) {
   let wordOut = '';
   // (which converter made a PDF in this run: a PDF used again still says by which)
   const madeBy = new Map();
+  // (0.6.0 T30: and beside the PDF, for a later session)
+  const byOf = (out) => out.replace(/\.pdf$/i, '') + '.by.txt';
+  const keepBy = (out, by) => { madeBy.set(out, by); try { fs.writeFileSync(byOf(out), by); } catch (_) { /* the PDF still serves */ } };
   // (what is running now, for stop() at quit: the child, and the Word it started once its id was printed)
   let child = 0, wordPid = 0, stopped = false;
   const rm = (f, o) => { try { fs.rmSync(f, { force: true, ...(o || {}) }); return true; } catch (_) { return false; } };
@@ -218,7 +221,13 @@ function makeConverter(d = {}) {
     let st;
     try { st = fs.statSync(src); } catch (e) { return { ok: false, why: 'the file could not be read' }; }
     const out = path.join(root, cacheName(src, st.size, st.mtimeMs) + '.pdf');
-    if (made(out)) return { ok: true, pdf: out, by: madeBy.get(out) || 'earlier', cached: true };
+    if (made(out)) {
+      if (madeBy.has(out)) return { ok: true, pdf: out, by: madeBy.get(out), cached: true };
+      // (0.6.0 T30: made in an earlier session - the converter's name kept beside it says by which)
+      let by = '';
+      try { by = fs.readFileSync(byOf(out), 'utf8').trim(); } catch (_) { /* none: made by 0.5.x */ }
+      return { ok: true, pdf: out, by: by === 'Word' || by === 'LibreOffice' ? by : 'earlier', cached: true, earlier: true };
+    }
     fs.mkdirSync(root, { recursive: true });
     const why = [];
     let wordMissing = platform !== 'win32', loMissing = false;
@@ -226,7 +235,7 @@ function makeConverter(d = {}) {
     else if (platform === 'win32') {
       const r = await viaWord(src, out);
       if (stopped) return closing; // (stop() ended it: no other converter is started while the app quits)
-      if (r.ok) { madeBy.set(out, 'Word'); return { ok: true, pdf: out, by: 'Word' }; }
+      if (r.ok) { keepBy(out, 'Word'); return { ok: true, pdf: out, by: 'Word' }; }
       wordMissing = !!r.missing; why.push(r.why);
       if (r.missing) wordOut = 'missing'; else if (/did not finish/.test(r.why)) wordOut = 'stuck';
     }
@@ -235,7 +244,7 @@ function makeConverter(d = {}) {
     if (exe) {
       const r = await viaSoffice(exe, src, out);
       if (stopped) return closing;
-      if (r.ok) { madeBy.set(out, 'LibreOffice'); return { ok: true, pdf: out, by: 'LibreOffice' }; }
+      if (r.ok) { keepBy(out, 'LibreOffice'); return { ok: true, pdf: out, by: 'LibreOffice' }; }
       why.push(r.why);
     } else { loMissing = true; if (platform === 'win32' && !wordMissing) why.push('LibreOffice was not found'); }
     if (wordMissing && loMissing) return { ok: false, none: true, why: 'converting a Word file to pages needs Microsoft Word or LibreOffice on this PC, and neither was found' };

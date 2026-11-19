@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { rr, type FileItem, type Kind } from './api';
 import { Icon, Logo } from './icons';
 import { readSet, setLabel, sideLabels, startSession, whenSaved, type Recent } from './runner';
-import { toast, plainError } from './model';
+import { toast, plainError, kept } from './model';
 import { startBoq, type BoqRecent } from './boqrun';
 import { startDocs } from './docsrun';
 
@@ -20,11 +20,14 @@ const empty = (): Side => ({ paths: [], recursive: true, files: null, reading: f
 
 export function Home({ kind = 'pdf' }: { kind?: Kind }) {
   const T = TEXT[kind];
-  const [old, setOld] = useState<Side>(empty());
-  const [neu, setNeu] = useState<Side>(empty());
+  // (a BOQ / Documents run that was stopped: its two sets are chosen again - T23)
+  const k = kind === 'pdf' ? undefined : kept[kind];
+  const [old, setOld] = useState<Side>(() => (k ? { ...empty(), paths: k.old.paths, files: k.old.files } : empty()));
+  const [neu, setNeu] = useState<Side>(() => (k ? { ...empty(), paths: k.neu.paths, files: k.neu.files } : empty()));
+  useEffect(() => { if (kind !== 'pdf') delete kept[kind]; }, [kind]);
   const [recent, setRecent] = useState<Recent[]>([]);
   const [recentBoq, setRecentBoq] = useState<BoqRecent[]>([]);
-  const [partial, setPartial] = useState(false);
+  const [partial, setPartial] = useState(!!k?.partial);
   // (after the comparison just left has been saved: its row shows how far it got)
   // (the BOQ and Documents tabs keep lists of their own)
   const otherKey = kind === 'docs' ? 'recentDocs' : 'recentBoq';

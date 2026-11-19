@@ -8,6 +8,7 @@ import type { Word, Rules } from './pdfium';
 import type { Pic, Verdict } from './picdiff';
 import { norm, fold, tok, likeness, alignGap, inOrder, wordDiff, strictWord, type Tok } from './boq';
 import { hunksOf, figsOf, repKey, groupKeys, type Hunk, type Fig } from './figs';
+import { isOff } from './flags';
 export type { Fig } from './figs';
 
 export interface Para {
@@ -955,7 +956,116 @@ function lcs<T>(a: T[], b: T[], eq: (x: T, y: T) => boolean): [number, number][]
   return out;
 }
 
+/**
+ * 0.6.0 T29 (DECISIONS 100): a ruled table's row that runs over a page break in one issue and is whole in the other
+ * gave a false "Changed" (its first part) and a false "Removed" / "Added" (the part on the next page - VT old p.67/68
+ * and four more). A candidate: the first row of a page, its number cell empty, right after a row that was the last
+ * thing on the page before, of as many cells (the empty number column dropped when it was read as a cell). It is
+ * joined to that row, cell by cell, ONLY when the other issue holds a row equal (strict) or >= 0.9 alike to the joined
+ * row - or a candidate of its own whose join is - and no row equal to either part alone. A heading row without a
+ * number is so never glued on unless the other issue has it glued too. The joined row keeps the first part's page,
+ * its bands and words on both pages. Both issues, every section; the pictures' places follow (`pics.after`).
+ */
+export function joinSplitRows(O: DocSection[], N: DocSection[]): number {
+  type Cand = { sec: DocSection; k: number; joined: Para };
+  const strict = (t: string) => strictText(t);
+  const cellsOf = (prev: Para, cur: Para): string[] | null => {
+    const a = prev.cells!, b = cur.cells!;
+    const bb = b.length === a.length + 1 && !b[0] ? b.slice(1) : b.length === a.length ? b : null;
+    if (!bb) return null;
+    return a.map((x, i) => (x && bb[i] ? x + ' ' + bb[i] : x || bb[i]));
+  };
+  // (a row's word boxes: each word's, an empty entry for each " | " between cells - the reader's own layout, line ~314)
+  const wordsIn = (p: Para): number[][][] => {
+    const out: number[][][] = [[]];
+    for (const w of p.wb ?? []) { if (w.length) out[out.length - 1].push(w); else out.push([]); }
+    return out;
+  };
+  /** the two rows as one, cell by cell (built from the rows as they are when it is taken: a row over three pages) */
+  const joinTwo = (prev: Para, cur: Para): Para | null => {
+    const cells = cellsOf(prev, cur);
+    if (!cells) return null;
+    const wa = wordsIn(prev), wbB = wordsIn(cur);
+    const off = cur.cells!.length === prev.cells!.length + 1 ? 1 : 0;
+    const wb: number[][] = [];
+    cells.forEach((_, i) => { if (i) wb.push([]); wb.push(...(wa[i] ?? []), ...(wbB[i + off] ?? [])); });
+    return { ...prev, text: cells.join(' | '), cells, seg: [...(prev.seg ?? []), ...(cur.seg ?? [])], ...(prev.wb || cur.wb ? { wb } : {}) };
+  };
+  const candidates = (side: DocSection[]): Cand[] => {
+    const out: Cand[] = [];
+    for (const sec of side) {
+      const ps = sec.paras;
+      // (where each page first comes: "nothing earlier on this page" in one look, not a scan per row - ritual 19 Nov:
+      //  3,000 pages of 40 rows took 52 s)
+      const first = new Map<number, number>();
+      ps.forEach((q, i) => { if (!first.has(q.page)) first.set(q.page, i); });
+      for (let k = 1; k < ps.length; k++) {
+        const cur = ps[k], prev = ps[k - 1];
+        if (!cur.cells || !prev.cells || cur.num || prev.file !== cur.file || prev.page !== cur.page - 1) continue;
+        // (the first row of its page; the row before the last thing on its page - prev is on the page before, so
+        //  "an earlier row on this page" is the page's first row coming before k)
+        if (first.get(cur.page)! < k) continue;
+        const joined = joinTwo(prev, cur);
+        if (joined) out.push({ sec, k, joined });
+      }
+    }
+    return out;
+  };
+  const cO = candidates(O), cN = candidates(N);
+  if (!cO.length && !cN.length) return 0;
+  // (rows of the other issue looked at only near a text's length: a strict fold or 0.9 alike needs it - the folds of
+  //  all rows cost VT's compare ~100 ms, the joins themselves under 5)
+  const rows = (side: DocSection[]) => side.flatMap((s) => s.paras.filter((p) => p.cells)).sort((a, b) => a.text.length - b.text.length);
+  const rO = rows(O), rN = rows(N);
+  const folds = new Map<Para, string>(), toks = new Map<Para, Tok>();
+  const fd = (p: Para) => { let f = folds.get(p); if (f === undefined) folds.set(p, (f = strict(p.text))); return f; };
+  const tk = (p: Para) => { let t = toks.get(p); if (!t) toks.set(p, (t = tok(p.text))); return t; };
+  const near = (rs: Para[], len: number): Para[] => {
+    let lo = 0, hi = rs.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (rs[m].text.length < len * 0.75) lo = m + 1; else hi = m; }
+    const out: Para[] = [];
+    for (let i = lo; i < rs.length && rs[i].text.length <= len * 1.34 + 4; i++) out.push(rs[i]);
+    return out;
+  };
+  const equal = (a: Para, b: Para) => fd(a) === fd(b);
+  const like = (a: Para, b: Para) => {
+    if (equal(a, b)) return true;
+    const x = tk(a), y = tk(b);
+    // (Dice >= 0.9 needs the shorter at least 0.82 of the longer)
+    if (Math.min(x.n, y.n) < 0.81 * Math.max(x.n, y.n)) return false;
+    return likeness(x, y) >= 0.9;
+  };
+  /** the other issue backs the join: a row (or a joined candidate) like the joined row, none equal to a part alone */
+  // (the other issue's rows by their strict fold: "a row equal to it" in one look - ritual 19 Nov, a long table of
+  //  rows alike in length made every look a scan of thousands)
+  const foldsOf = new Map<Para[], Set<string>>();
+  const foldSet = (rs: Para[]) => { let f = foldsOf.get(rs); if (!f) foldsOf.set(rs, (f = new Set(rs.map(fd)))); return f; };
+  const backed = (c: Cand, otherRows: Para[], otherCands: Cand[]): Cand | 'row' | null => {
+    const prev = c.sec.paras[c.k - 1], cur = c.sec.paras[c.k], fs = foldSet(otherRows);
+    if (fs.has(fd(prev)) || fs.has(fd(cur))) return null;
+    if (fs.has(fd(c.joined)) || near(otherRows, c.joined.text.length).some((r) => like(r, c.joined))) return 'row';
+    return otherCands.find((d) => like(d.joined, c.joined)) ?? null;
+  };
+  const take = new Set<Cand>();
+  for (const c of cO) { const b = backed(c, rN, cN); if (b) { take.add(c); if (b !== 'row') take.add(b); } }
+  for (const c of cN) { const b = backed(c, rO, cO); if (b) { take.add(c); if (b !== 'row') take.add(b); } }
+  // (joined from the end of each section back: the indices before stay right)
+  const bySec = new Map<DocSection, Cand[]>();
+  for (const c of take) bySec.set(c.sec, [...(bySec.get(c.sec) ?? []), c]);
+  for (const [sec, cs] of bySec) {
+    for (const c of cs.sort((a, b) => b.k - a.k)) {
+      // (from the rows as they are now: a later part already joined to this one comes with it)
+      const j = joinTwo(sec.paras[c.k - 1], sec.paras[c.k]) ?? c.joined;
+      sec.paras.splice(c.k - 1, 2, j);
+      for (const pic of sec.pics ?? []) if (pic.after >= c.k) pic.after--;
+    }
+  }
+  return take.size;
+}
+
 export function docEntries(O: DocSection[], N: DocSection[], pj?: PicJudge, wm?: { o: Map<string, string[]>; n: Map<string, string[]> }): DocsResult {
+  // (0.6.0 T29: a table row split over a page break in one issue, whole in the other - one row again)
+  if (!isOff('splitrows')) joinSplitRows(O, N);
   const { secs, moves } = compareSections(O, N);
   // (a Word file's paragraph: its place in the file; a PDF's: where it is, and its words' boxes when it changed)
   const iIn = new Map<Para, number>();

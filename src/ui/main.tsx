@@ -9,6 +9,8 @@ import { readSet, sideLabels, startSession } from './runner';
 import { startBoq, exportBoqExcel, leaveBoq, visible, boqGroups, isFigure, itemCount } from './boqrun';
 import { startDocs, exportDocsExcel, leaveDocs, docVisible, docGroups } from './docsrun';
 import { exportExcel, exportPdf } from './exporting';
+import { workers, viewer, viewer2, exporter, jobEngines } from './engines';
+import { poolState } from './viewpool';
 
 window.addEventListener('error', (e) => { rr.log('window error: ' + (e.error?.stack || e.message)); rr.reportCrash?.('window', String(e.error?.message || e.message), String(e.error?.stack || '')); });
 window.addEventListener('unhandledrejection', (e) => { rr.log('window rejection: ' + ((e.reason as Error)?.stack || e.reason)); rr.reportCrash?.('window (promise)', String((e.reason as Error)?.message || e.reason), String((e.reason as Error)?.stack || '')); });
@@ -45,6 +47,22 @@ createRoot(document.getElementById('root')!).render(<Guard><App /></Guard>);
     return s ? { phase: s.phase, note: s.note, zones: s.zones.length, selected: s.pairs.find((p) => p.id === ui.selected)?.key ?? null, area: ui.area, areaFig: (() => { const p = s.pairs.find((x) => x.id === ui.selected); return !!p && ui.area >= 0 && !!p.result?.areas[ui.area]?.text.some(isFigText); })(), filter: ui.filter, todo: s.pairs.filter((p) => needsReview(p) && !p.reviewed).length, figs: s.pairs.filter((p) => p.status === 'changed' && hasFigures(p)).length, groups: [...textGroups(s.pairs).values()].map((g) => g.sheets.length),
       pairs: s.pairs.map((p) => ({ fig: p.status === 'changed' && hasFigures(p), key: p.key, status: p.status, areas: p.result?.areas.length ?? null, real: p.result ? realAreas(p).length : null, steps: stepAreas(p).length, tinyStop: tinyFrom(p) > 0, error: p.error, how: p.how, secs: p.secs, fine: p.result?.alignInfo?.fine, reviewed: !!p.reviewed, cached: !!p.result?.fromCache, old: p.old?.rel ?? null, neu: p.neu?.rel ?? null })) } : null;
   },
+  /** (0.6.0 M1 tests) the view pool: the engine on screen and what each view engine holds */
+  viewPool() { return poolState(); },
+  /** (0.6.0 T22 tests) each engine's memory in MB: process, PDFium's, MuPDF's (an engine not there: skipped) */
+  async engineMemory() {
+    const out: Record<string, { rss: number; pdfium: number; mupdf: number }> = {};
+    const mb = (n: number) => Math.round((n || 0) / 2 ** 20);
+    for (const c of [viewer, viewer2, exporter, ...workers]) {
+      try {
+        const m = await Promise.race([c.call<{ rss: number; heap: number; mu?: number }>('memory'), new Promise<never>((_r, j) => setTimeout(() => j(new Error('no answer')), 3000))]);
+        out[c.name] = { rss: mb(m.rss), pdfium: mb(m.heap), mupdf: mb(m.mu ?? 0) };
+      } catch { /* not running */ }
+    }
+    return out;
+  },
+  /** (T23 tests) each engine: times restarted, the call it is running now and for how long (ms) */
+  engines() { return [viewer, viewer2, exporter, ...jobEngines(), ...workers].map((c) => ({ name: c.name, restarts: c.restarts, stuck: c.stuck() })); },
   /** (T8 tests) every sheet's reviewed tick taken back */
   clearReviewed() { for (const p of ui.session?.pairs ?? []) p.reviewed = false; ui.selected = null; ui.area = -1; bump(); },
   /** the change boxes of a sheet (points) */

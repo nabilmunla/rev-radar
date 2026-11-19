@@ -42,6 +42,8 @@ const P: Record<string, string> = {
   undo: 'M6.5 8H12a4 4 0 010 8H8M9 5L6 8l3 3',
   panelleft: 'M3.5 4h13v12h-13zM7.5 4v12M5 7h1M5 9.5h1',
   panelright: 'M3.5 4h13v12h-13zM12.5 4v12M14 7h1M14 9.5h1',
+  chevl: 'M12 5l-5 5 5 5',
+  chevr: 'M8 5l5 5-5 5',
   keyboard: 'M2.5 5.5h15v9h-15zM5 8h1M8 8h1M11 8h1M14 8h1M5 11h1M14 11h1M8 11h4',
 };
 export function Icon({ n, size = 18, sw = 1.6, className }: { n: string; size?: number; sw?: number; className?: string }) {

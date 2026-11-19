@@ -4,7 +4,10 @@
 import { useEffect, useRef } from 'react';
 import { ui, bump, useUI } from './model';
 import { Icon } from './icons';
-import { startBoq, ticksChanged, visible, boqCount, boqChanged, summary, needsCheck, fmt, wordDiff, boqMates, boqTickGroup, type BoqEntry, type BoqFilter, type BoqSession } from './boqrun';
+import { usePanels, SidePanel, togglePanel, panelTip } from './PanelSize';
+import { HScroll } from './Scroller';
+import { BusyLine } from './busy';
+import { startBoq, stopBoq, ticksChanged, visible, boqCount, countLines, summary, needsCheck, fmt, wordDiff, boqMates, boqTickGroup, type BoqEntry, type BoqFilter, type BoqSession } from './boqrun';
 import type { BoqItem } from '../engine/boq';
 import { BoqSide } from './BoqSide';
 import { FigChip, SameChange } from './DocsSide';
@@ -35,6 +38,7 @@ export function BoqResults() {
   const list = s.phase === 'done' ? visible(s) : [];
   const cur = s.sel >= 0 ? s.entries[s.sel] : undefined;
   const listRef = useRef<HTMLDivElement>(null);
+  const pn = usePanels('boq', { right: view === 'side' });
 
   const select = (e: BoqEntry | undefined) => { if (!e) return; s.sel = s.entries.indexOf(e); bump(); };
   const step = (d: 1 | -1) => {
@@ -62,25 +66,29 @@ export function BoqResults() {
       const t = e.target as HTMLElement | null;
       if (e.ctrlKey || e.metaKey || e.altKey || t?.closest?.('textarea, select, [contenteditable]') || (t?.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'range'].includes((t as HTMLInputElement).type))) return;
       if (t?.tagName === 'INPUT') t.blur();
-      const k = e.key.toLowerCase();
+      if (document.querySelector('.scrim')) return;
+      // [ and ] by the key's place as well (other keyboard layouts); ] does nothing in the side view (no details there)
+      const k = e.code === 'BracketLeft' ? '[' : e.code === 'BracketRight' ? ']' : e.key.toLowerCase();
       if (k === 'n' || e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); step(1); }
       else if (k === 'p' || e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+      else if (k === '[') togglePanel('boq', 'left');
+      else if (k === ']') { if (view === 'list') togglePanel('boq', 'right'); }
       else if (k === 'r' && !e.repeat) { e.preventDefault(); if (e.shiftKey) tickAll(); else tick(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
   // the selected line kept in view
-  useEffect(() => { listRef.current?.querySelector('.srow.on')?.scrollIntoView({ block: 'nearest' }); }, [s.sel, s.filter]);
+  useEffect(() => { listRef.current?.querySelector('.srow.on')?.scrollIntoView({ block: 'nearest' }); }, [s.sel, s.filter, st.panels.boq.left]);
 
-  if (s.phase === 'running') return <div className="empty"><span className="dot busy" /> {s.note || 'Reading and pairing the items…'}</div>;
+  if (s.phase === 'running') return <div className="empty"><BusyLine what={s.note || 'Reading and pairing the items…'} since={s.t0 ?? performance.now()} onStop={stopBoq} stopTitle="Stop and go back to the two issues - nothing is kept" /></div>;
   if (s.phase === 'error') return <div className="empty"><h3>The BOQs could not be compared</h3><p>{s.error}</p><button className="btn" onClick={() => void startBoq(s.oldSet, s.newSet, s.partial)}><Icon n="refresh" size={14} /> Try again</button></div>;
   const r = s.result!;
   const count = (f: BoqFilter) => boqCount(s, f);
   const todo = count('todo');
   return (
-    <div className={'results' + (st.panels.left ? '' : ' noleft') + (st.panels.right && view === 'list' ? '' : ' noright')}>
-      {st.panels.left && (
+    <div className="results pw" style={pn.style} ref={pn.ref}>
+      <SidePanel side="left" p={pn.left}>
         <aside className="left">
           <div className="filters">
             {FILTERS.map(([f, label, tip]) => {
@@ -122,34 +130,37 @@ export function BoqResults() {
             })}
           </div>
         </aside>
-      )}
+      </SidePanel>
       <main className={'center boq-center' + (view === 'side' ? ' side' : '')}>
         <div className="boq-bar">
-          <div className="seg" role="tablist">
-            <button className={view === 'side' ? 'on' : ''} onClick={() => setView('side')} title="The old and new sheets side by side, the changes coloured: click one, the other side goes to it">Side by side</button>
-            <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} title="The change chosen on the left, old and new field by field, with the totals and files">Details</button>
-          </div>
-          <span className="faint">{r.old.items.length.toLocaleString()} items old · {r.neu.items.length.toLocaleString()} new · {todo ? `${todo} of ${count('changes')} to review` : count('changes') ? 'all changes ticked off' : 'nothing changed'}</span>
-          {(r.oldPdf || r.newPdf) && <span className="chip st-wait" title="A PDF's table is rebuilt from the page: look at the PDF before relying on a change">read from PDF</span>}
-          {view === 'side' && (
-            <label className="check sm boq-partial" title="The new issue holds only the pages that changed: items it does not have are not counted as removed">
-              <input type="checkbox" checked={s.partial} onChange={(e) => void startBoq(s.oldSet, s.newSet, e.target.checked)} /> New issue is changed pages only
-            </label>
-          )}
+          <button className={'btn sm icon panelbtn' + (st.panels.boq.left ? '' : ' on')} onClick={() => togglePanel('boq', 'left')} title={panelTip('left', st.panels.boq.left)}><Icon n="panelleft" size={16} /></button>
+          <HScroll className="boq-tools" wrapClass="boq-scroll">
+            <div className="seg" role="tablist">
+              <button className={view === 'side' ? 'on' : ''} onClick={() => setView('side')} title="The old and new sheets side by side, the changes coloured: click one, the other side goes to it">Side by side</button>
+              <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} title="The change chosen on the left, old and new field by field, with the totals and files">Details</button>
+            </div>
+            <span className="faint">{r.old.items.length.toLocaleString()} items old · {r.neu.items.length.toLocaleString()} new · {todo ? `${todo} of ${count('changes')} to review` : count('changes') ? 'all changes ticked off' : 'nothing changed'}</span>
+            {(r.oldPdf || r.newPdf) && <span className="chip st-wait" title="A PDF's table is rebuilt from the page: look at the PDF before relying on a change">read from PDF</span>}
+            {view === 'side' && (
+              <label className="check sm boq-partial" title="The new issue holds only the pages that changed: items it does not have are not counted as removed">
+                <input type="checkbox" checked={s.partial} onChange={(e) => void startBoq(s.oldSet, s.newSet, e.target.checked)} /> New issue is changed pages only
+              </label>
+            )}
+          </HScroll>
+          {view === 'list' && <button className={'btn sm icon panelbtn' + (st.panels.boq.right ? '' : ' on')} onClick={() => togglePanel('boq', 'right')} title={panelTip('right', st.panels.boq.right)}><Icon n="panelright" size={16} /></button>}
         </div>
         {view === 'side' ? <BoqSide s={s} /> : cur ? <Detail e={cur} s={s} /> : <div className="empty">Choose a change on the left (N goes to the next one).</div>}
       </main>
-      {st.panels.right && view === 'list' && (
+      {view === 'list' && (
+        <SidePanel side="right" p={pn.right}>
         <aside className="right">
           <div className="panel">
             <h3>BOQ comparison</h3>
             <div className="sumtable">
               <Row l="Items, old issue" v={r.old.items.length} />
               <Row l="Items, new issue" v={r.neu.items.length} />
-              <Row l="Changed" v={boqChanged(s.entries)} />
-              <Row l="Added" v={r.added.length} />
-              <Row l="Removed" v={r.removed.length} />
-              <Row l="Renumbered only" v={s.entries.filter((e) => e.kind === 'renumbered').length} />
+              {/* (0.6.0 T30: the register's lines, pictures included - they add up to its Changes rows) */}
+              {countLines(s).map(([l, v]) => <Row key={l} l={l} v={v} />)}
               {s.partial && <Row l="Not in the pages issued" v={r.outside.length} />}
             </div>
             <div className="reviewline">{todo ? `${todo} of ${count('changes')} to review` : count('changes') ? 'All changes ticked off' : ''}</div>
@@ -171,6 +182,7 @@ export function BoqResults() {
             </details>
           </div>
         </aside>
+        </SidePanel>
       )}
     </div>
   );

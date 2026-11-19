@@ -46,7 +46,8 @@ export function pdfBook(name: string, pageCount: number, pageWords: (i: number) 
   const key = (l: Word[]) => l.map((w) => w.s).join(' ').toLowerCase().replace(/[\d/.-]+/g, '#').replace(/#r(ev)?#$/, '#');
   // (in the top or bottom eighth of a page's text, on half the pages of 3 or more: an item line
   //  repeated on short pages - "Plaster to walls 55 m2" / "60 m2" - is never one)
-  const band = all.map((ls) => { const ys = ls.flatMap((l) => l.map((w) => [w.y0, w.y1])).flat(); const lo = Math.min(...ys), hi = Math.max(...ys); return [lo + (hi - lo) * 0.125, hi - (hi - lo) * 0.125]; });
+  // (min / max by a loop: a spread of a page of 70,000 words' heights throws - 0.6.0 T24)
+  const band = all.map((ls) => { let lo = Infinity, hi = -Infinity; for (const l of ls) for (const w of l) { if (w.y0 < lo) lo = w.y0; if (w.y1 > hi) hi = w.y1; } return [lo + (hi - lo) * 0.125, hi - (hi - lo) * 0.125]; });
   const inBand = (l: Word[], p: number) => { const y = (l[0].y0 + l[0].y1) / 2; return y < band[p][0] || y > band[p][1]; };
   const onPages = new Map<string, number>();
   all.forEach((ls, p) => { for (const k of new Set(ls.filter((l) => inBand(l, p)).map(key))) onPages.set(k, (onPages.get(k) || 0) + 1); });

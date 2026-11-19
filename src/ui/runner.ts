@@ -3,7 +3,7 @@
 // opens instantly next time.
 import { rr, type FileItem, type Kind } from './api';
 import { workers, viewer } from './engines';
-import { fileArg, READ_FAIL, type EngineClient } from '../engine/rpc';
+import { fileArg, READ_FAIL, isHung, hungFile, type EngineClient } from '../engine/rpc';
 import { pairByNames, pairByContent, sheetKeyOf, cleanTitle, type SheetRef, type PairPlan, type Fingerprint } from './pairing';
 import { classifyAreas, sizeKey } from './titleblock';
 import { pairBySheetNo, type ReadPage } from './sheetpair';
@@ -72,15 +72,20 @@ async function spread<T, R>(items: T[], fn: (c: EngineClient, x: T) => Promise<R
 /** a call once more when its engine went down meanwhile (another call may have brought it down) */
 async function again1<T>(f: () => Promise<T>): Promise<T> {
   try { return await f(); } catch (e) {
+    // (an engine ended for not answering would only hang again on the same call - T23)
+    if (isHung(e)) throw e;
     if (/restart/.test(String((e as Error)?.message)) || (e as { fatal?: boolean }).fatal) return f();
     throw e;
   }
 }
 
+/** an engine's error for a call that read `path`: a hung one says which file (M2-6, DECISIONS 120) */
+const named = (e: unknown, path: string): unknown => (isHung(e) ? hungFile(e, path.split(/[\\/]/).pop() || path) : e);
+
 /** one sheet's file read again (after "Try again" on a file that could not be read) */
 async function refreshRef(c: EngineClient, ref: SheetRef): Promise<SheetRef> {
   type Info = { pages: { w: number; h: number }[]; labels: string[]; error?: string };
-  const inf = await again1(() => c.call<Info>('info', [fileArg(ref.file)])).catch((e) => ({ error: String(e?.message || e) }) as Info);
+  const inf = await again1(() => c.call<Info>('info', [fileArg(ref.file)])).catch((e) => ({ error: String((named(e, ref.file) as Error)?.message || e) }) as Info);
   const st = (await rr.stat([ref.file]).catch(() => [null]))[0];
   if (!inf || inf.error || !inf.pages?.length) return { ...ref, bad: String(inf?.error || 'The PDF has no pages') };
   const k = Math.min(ref.page, inf.pages.length - 1);
@@ -89,7 +94,7 @@ async function refreshRef(c: EngineClient, ref: SheetRef): Promise<SheetRef> {
 
 async function sheetsOf(files: FileItem[], s: Session, which: string, live: () => boolean): Promise<SheetRef[]> {
   type Info = { pages: { w: number; h: number }[]; labels: string[]; error?: string };
-  const infos = await spread(files, (c, f) => again1(() => c.call<Info>('info', [fileArg(f.path)])).catch((e) => ({ error: String(e?.message || e) }) as Info),
+  const infos = await spread(files, (c, f) => again1(() => c.call<Info>('info', [fileArg(f.path)])).catch((e) => ({ error: String((named(e, f.path) as Error)?.message || e) }) as Info),
     (d) => { s.note = `Reading ${which}: ${d} of ${files.length} files`; bump(); }, live);
   const out: SheetRef[] = [];
   files.forEach((f, i) => {
@@ -209,22 +214,26 @@ async function pairAll(olds: SheetRef[], news: SheetRef[], s: Session, live: () 
     for (const w of want) { const k = w.r.file; if (!byFile.has(k)) byFile.set(k, []); byFile.get(k)!.push(w); }
     const groups = [...byFile.values()];
     let done = 0;
+    // (an engine that stopped answering and was ended - T23: pairing on empty words would call every sheet new or
+    //  removed, so the run stops and says why)
+    let hung: unknown = null;
     const fps = await spread(groups, async (c, g) => {
-      const res = await again1(() => c.call<{ page: number; words: string[]; toks?: PageToks }[]>('fingerprint', [fileArg(g[0].r.file), g.map((x) => x.r.page)])).catch(() => g.map((x) => ({ page: x.r.page, words: [] as string[], toks: undefined })));
+      const res = await again1(() => c.call<{ page: number; words: string[]; toks?: PageToks }[]>('fingerprint', [fileArg(g[0].r.file), g.map((x) => x.r.page)])).catch((e) => { if (isHung(e)) hung ??= named(e, g[0].r.file); return g.map((x) => ({ page: x.r.page, words: [] as string[], toks: undefined })); });
       s.note = `Reading what the sheets say: ${(done += g.length)} of ${want.length}`; bump();
       return g.map((x, i) => ({ side: x.side, toks: res[i]?.toks, fp: { ref: x.r, words: res[i]?.words || [] } as Fingerprint }));
-    }, undefined, live);
+    }, undefined, () => live() && !hung);
+    if (hung) throw hung;
     if (!live()) return [];
     const flat = fps.flat();
     const side = (k: number) => flat.filter((x) => x.side === k);
     const rp = (k: number): ReadPage[] => side(k).map((x) => ({ ref: x.fp.ref, toks: x.toks }));
     const fo = side(0), fn = side(1);
-    let bySheet: [number, number][] = [];
+    let bySheet: [number, number, boolean][] = [];
     try {
       const sp = pairBySheetNo(rp(0), rp(1), rp(2), rp(3));
       for (const [r, nm] of sp.names) r.read = nm;
       const io = new Map(fo.map((x, i) => [x.fp.ref, i] as const)), jn = new Map(fn.map((x, j) => [x.fp.ref, j] as const));
-      bySheet = sp.pairs.map(([a, b]) => [io.get(a)!, jn.get(b)!] as [number, number]).filter(([i, j]) => i != null && j != null);
+      bySheet = sp.pairs.map(([a, b, rep]) => [io.get(a)!, jn.get(b)!, rep] as [number, number, boolean]).filter(([i, j]) => i != null && j != null);
     } catch { /* (a reading fault leaves today's pairing as it was) */ }
     const byContent = pairByContent(fo.map((x) => x.fp), fn.map((x) => x.fp), 0.35, bySheet);
     plans.push(...byContent.pairs);

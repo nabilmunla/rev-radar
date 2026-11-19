@@ -8,11 +8,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { VFile, isFileSrc, type FileSrc } from './files';
+import { VFile, isFileSrc, testHang, type FileSrc } from './files';
 import * as pf from './pdfium';
 import { comparePair, viewPicture, sheetThumb, type Settings, type ViewMode, type ViewPart } from './job';
 import { exportReport, type ExportSheet } from './report';
 import { readable } from './heavy';
+import { muHeap, shouldRecycle, RECYCLE_AT, muBar } from './muheap';
+import { muOpenCount } from './murender';
 import { SUPERSEDED } from './rpc';
 import { readBook, type Book } from './sheets';
 import { fingerprintPages } from './fpread';
@@ -47,6 +49,9 @@ const img = (px: Uint8ClampedArray, w: number, h: number) => ({ $img: 1, w, h, p
 /** documents the viewer has open (one pair at a time, plus the one before) */
 /** pairs open for the viewer; stamps: each side's file as it was read (size and time - '' none) */
 const viewDocs: { key: string; ids: string[]; stamps: string[]; pages?: string }[] = [];
+/** (0.6.0 T22 B) how much memory (PDFium's + MuPDF's) each view document's calls took: the one that took the most
+ *  is the sheet that put a view engine past a bar - kept after it is closed (the memory stays) */
+const grew = new Map<string, number>();
 let seq = 0;
 
 function openTemp(src: VFile): string {
@@ -74,7 +79,15 @@ async function handlers(): Promise<Record<string, Handler>> {
   await pf.startPdfium(wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength) as ArrayBuffer);
   return {
     ping() { return process.pid; },
-    memory() { return { rss: process.memoryUsage().rss, heap: pf.heapBytes() }; },
+    memory() {
+      const heap = pf.heapBytes(), mu = muHeap();
+      let grewMost: string | null = null, most = 0;
+      for (const [k, n] of grew) if (n > most) { most = n; grewMost = k; }
+      // (T22 B: a view engine past a bar says so, and which sheet took it there - the window then lets go of what it
+      //  holds when that sheet is not one it keeps, and the rule after the call starts it afresh. RR_OFF=viewrecycle: never)
+      const past = !isOff('viewrecycle') && (heap > RECYCLE_AT || mu > muBar());
+      return { rss: process.memoryUsage().rss, heap, mu, past, grewMost };
+    },
 
     /** page sizes (points, as shown) and labels of a file */
     info(src: VFile) {
@@ -459,8 +472,6 @@ const isFatal = pf.isFatalError;
 
 /** methods whose files stay open after the call (the documents read from them later) */
 const KEEPS = new Set(['viewOpen']);
-/** WebAssembly memory only grows (to 2 GB at most): an engine past this starts afresh after its call */
-const RECYCLE_AT = 1.25 * 1024 ** 3;
 
 let chain: Promise<void> = Promise.resolve();
 let exiting = false;
@@ -495,7 +506,12 @@ function serve(port: PortMain) {
         if (!h) throw new Error('unknown call ' + method);
         const a: unknown[] = [];
         for (const x of args || []) a.push(await inArgs(x, files, !SIZES_ONLY.has(method)));
+        // (T22 B: the memory a view document's call takes, put down to that document)
+        const viewKey = method.startsWith('view') && typeof args?.[0] === 'string' ? args[0] as string : null;
+        const before = viewKey ? pf.heapBytes() + muHeap() : 0;
+        testHang(method); // (tests only: RR_TEST_HANG)
         const value = await h(...a);
+        if (viewKey) { const d = pf.heapBytes() + muHeap() - before; if (d > 0) grew.set(viewKey, (grew.get(viewKey) ?? 0) + d); }
         // a file that stopped reading part way gives a wrong answer that looks right (blank or half
         // drawn pages): never pass it on
         if (files.some((f) => f.failed)) throw new Error(pf.READ_FAIL);
@@ -510,9 +526,11 @@ function serve(port: PortMain) {
       }
       if (fatal) { exiting = true; parentPort.postMessage({ type: 'fatal' }); setTimeout(() => process.exit(70), 50); return; }
       try {
-        if (process.uptime() > 20 && pf.heapBytes() > RECYCLE_AT && viewDocs.length === 0) {
+        const why = shouldRecycle({ uptime: process.uptime(), pdfHeap: pf.heapBytes(), muHeap: muHeap(), muOpen: muOpenCount(), viewDocs: viewDocs.length });
+        if (why) {
           // tell the window first: it holds new calls for the next engine (calls already on their
           // way are answered 'retry' and sent again)
+          console.error(`starting afresh: ${why} memory ${Math.round((why === 'mupdf' ? muHeap() : pf.heapBytes()) / 2 ** 20)} MB`);
           exiting = true;
           for (const p of ports) p.postMessage({ notice: 'recycling' });
           setTimeout(() => process.exit(75), 50);

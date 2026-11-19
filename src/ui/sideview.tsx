@@ -8,6 +8,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type React
 import { Icon } from './icons';
 import { viewer } from './engines';
 import { fileArg } from '../engine/rpc';
+import { SplitEdge, useSplit } from './PanelSize';
 import { layoutText, canvasMeasure, forgetWidths, geom, type LayBlock, type Layout } from './textlay';
 
 /** a row (a sheet's, a paragraph's) */
@@ -285,10 +286,15 @@ export interface SideViewProps<I> {
   chip?: ChipProps;
   /** what tests know a thing by */
   idOf?: (x: I) => number | undefined;
+  /** (T27) whose tab this is: the old | new split is remembered per tab (rr.pw.<tab>.split) */
+  tab: 'boq' | 'docs';
 }
 
 export function SideView<I>(P: SideViewProps<I>) {
   const { m } = P;
+  // (T27) the old pane's share of the two, 30-70 %: each pane fits its page to its own width (kOf) and keeps the chosen
+  // item where it is (unitAt), so a drag leaves it level and the scroll in step - nothing else to do here
+  const [pct, setPct] = useSplit(P.tab);
   const first = (side: Side) => m.docs[side][0]?.key ?? '';
   const [key, setKey] = useState<Record<Side, string>>(() => ({ o: first('o'), n: m.match.o.get(first('o')) ?? first('n') }));
   const [top, setTop] = useState<Record<Side, number>>({ o: 0, n: 0 });
@@ -328,6 +334,12 @@ export function SideView<I>(P: SideViewProps<I>) {
     const p = x ? m.place(side, x) : null;
     if (p && p.doc.key === d.key) { const off = toPx(side, d, p.u0) - y; if (off > 0 && off < h - 20) return { key: d.key, u: p.u0, off, k }; }
     return { key: d.key, u: toU(side, d, y + h / 3), off: h / 3, k };
+  };
+
+  /** the anchor `a` as read now - or the one kept, when it is the same place within the pixel a scroll position is rounded to */
+  const same = (side: Side, d: Doc<I>, a: { key: string; u: number; off: number; k: number }, y: number) => {
+    const w = unitAt.current[side];
+    return w && w.key === a.key && Math.abs(toPx(side, d, w.u) - toPx(side, d, a.u)) < 1 && Math.abs(toPx(side, d, w.u) - w.off - y) < 1 ? { ...w, k: a.k } : a;
   };
 
   // (the docs shown kept to ones there are: the view switched)
@@ -408,8 +420,12 @@ export function SideView<I>(P: SideViewProps<I>) {
       if (!d || !el) continue;
       const k = scaleOf(side, d);
       const was = unitAt.current[side];
-      if (was && was.key === d.key && Math.abs(was.k - k) > 1e-6 && pending.current[side] === null) put(side, el, toPx(side, d, was.u) - was.off);
-      else unitAt.current[side] = anchor(side, d, el.scrollTop);
+      if (was && was.key === d.key && Math.abs(was.k - k) > 1e-6 && pending.current[side] === null) {
+        put(side, el, toPx(side, d, was.u) - was.off);
+        // (the anchor kept as it was, not read back from the scroll position: that is rounded to a pixel, and over a
+        // drag of the split - a new scale at every step - the error added up to 20 px, the two sides drifting apart)
+        unitAt.current[side] = { ...was, k };
+      } else unitAt.current[side] = same(side, d, anchor(side, d, el.scrollTop), el.scrollTop);
     }
   });
   // ctrl + wheel over a PDF: zoom (both sides)
@@ -663,7 +679,10 @@ export function SideView<I>(P: SideViewProps<I>) {
         </label>
       </div>
       {P.note && <div className="sbs-note">{P.note}</div>}
-      <div className="sbs-panes">{pane('o')}{pane('n')}</div>
+      <div className="sbs-panes" data-split={pct} style={pct === 50 ? undefined : { gridTemplateColumns: `minmax(0, ${pct}fr) minmax(0, ${100 - pct}fr)` }}>
+        {pane('o')}{pane('n')}
+        <SplitEdge pct={pct} onPct={setPct} />
+      </div>
       {P.strip(shown)}
     </div>
   );

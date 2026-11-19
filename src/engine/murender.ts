@@ -13,6 +13,7 @@
 // mixed, that would be a difference on every line). Words, sizes and page kinds still come from
 // PDFium. Pages are kept as display lists (read once, drawn many times: the close looks, the viewer).
 import { readerOf, type Gray } from './pdfium';
+import { noteMu } from './muheap';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MU = any;
@@ -22,13 +23,15 @@ let muFailed = false;
 export async function ensureMu(): Promise<boolean> {
   if (mu) return true;
   if (muFailed) return false;
-  try { mu = await import('mupdf'); return true; } catch (e) { muFailed = true; console.error('MuPDF not available: ' + String((e as Error)?.message || e)); return false; }
+  try { mu = await import('mupdf'); noteMu(mu); return true; } catch (e) { muFailed = true; console.error('MuPDF not available: ' + String((e as Error)?.message || e)); return false; }
 }
 
 interface MDoc { doc: MU; lists: Map<string, { list: MU; t: number }>; blend: Map<number, boolean>; tiles: Map<number, Tiles | null>; marks: Map<number, number> }
 /** a page "as shown" cut into tiles (see buildTiles): the tile rects (page space) and their lists */
 interface Tiles { rects: number[][]; lists: MU[] }
 const mdocs = new Map<string, MDoc>();
+/** MuPDF documents open in this engine (T22: it starts afresh for MuPDF's memory only when none is) */
+export const muOpenCount = () => mdocs.size;
 
 function mdoc(id: string): MDoc {
   const have = mdocs.get(id);

@@ -34,7 +34,7 @@ contextBridge.exposeInMainWorld('rr', {
   engineKill: (name) => ipcRenderer.invoke('engines:kill', name),
   enginePriority: (name, low) => ipcRenderer.invoke('engines:priority', name, !!low),
   engineAdd: (name) => ipcRenderer.invoke('engines:add', name),
-  engineStop: (name) => ipcRenderer.invoke('engines:stop', name),
+  engineStop: (name, discard) => ipcRenderer.invoke('engines:stop', name, discard),
   busy: (what) => ipcRenderer.invoke('app:busy', what),
   pathOf: (file) => { try { return webUtils.getPathForFile(file); } catch (_) { return ''; } },
   log: (line) => ipcRenderer.send('log', String(line)),

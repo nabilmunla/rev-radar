@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react
 import { ui, bump, realAreas, areaLabels, moveTitle, type Pair } from './model';
 import { viewer, pooled, onEngineRestart } from './engines';
 import { fileArg, type EngineClient } from '../engine/rpc';
-import { engineFor, shown as shownOn, backEngine, has, anyHas, opened as openedOn, notOpened, keepPairs, putWarm, takeWarm, releaseWarm, type Warm } from './viewpool';
+import { engineFor, shown as shownOn, backEngine, has, anyHas, opened as openedOn, notOpened, keepPairs, letGoIfHeavy, putWarm, takeWarm, releaseWarm, type Warm } from './viewpool';
 import { SUPERSEDED } from '../engine/rpc';
 import { previewOf, addZone } from './runner';
 import { Icon } from './icons';
@@ -81,10 +81,11 @@ export function Viewer({ pair, mode, fade, flicker, onMode, next }: { pair: Pair
   const [epoch, setEpoch] = useState(0);
   const shown = useRef('');
   const downs = useRef(new Map<string, number>());
-  useEffect(() => onEngineRestart((c) => {
+  useEffect(() => onEngineRestart((c, planned) => {
     // (the other view engine: what it made ready is gone - viewpool.ts forgets it)
     if (c !== eng.current) return;
-    if (shown.current) downs.current.set(shown.current, (downs.current.get(shown.current) || 0) + 1);
+    // (a restart for its memory - T22 - is not the sheet's doing: no "down", never "Too heavy" for it)
+    if (shown.current && !planned) downs.current.set(shown.current, (downs.current.get(shown.current) || 0) + 1);
     opened.current = '';
     setEpoch((e) => e + 1);
   }), []);
@@ -426,9 +427,16 @@ export function Viewer({ pair, mode, fade, flicker, onMode, next }: { pair: Pair
     }
     try {
       if (!has(e, np.id)) {
-        // (known to be there before it is: going there meanwhile waits on this engine, not opens it twice)
-        openedOn(e, np.id);
-        try { await e.call('viewOpen', [np.id, fileArg(np.old.file), fileArg(np.neu.file), keepPairs()]); } catch (err) { notOpened(e, np.id); throw err; }
+        try {
+          // (T22 B: past a bar for a sheet it will not keep - it lets go of all it holds and starts afresh first. It
+          //  notes np as opening on e before its first wait - M1 C3 - so it is called before openedOn, which would
+          //  put out of the list the sheet it must look at)
+          const going = letGoIfHeavy(e, np.id);
+          // (known to be there before it is: going there meanwhile waits on this engine, not opens it twice)
+          openedOn(e, np.id);
+          await going;
+          await e.call('viewOpen', [np.id, fileArg(np.old.file), fileArg(np.neu.file), keepPairs()]);
+        } catch (err) { notOpened(e, np.id); throw err; }
       }
       const res = await e.call<unknown[]>('viewWarm', [np.id, pages[0], pages[1], modes[0] !== 'overlay', jobs], undefined, 'warm');
       const pics: Warm[] = res.map((x, i) => {

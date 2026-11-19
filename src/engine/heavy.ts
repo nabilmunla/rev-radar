@@ -21,10 +21,11 @@ import crypto from 'node:crypto';
 import { VFile, type FileSrc } from './files';
 import { MIN_STROKES } from './strokes';
 import { StrokeMergeStream } from './strokestream';
+import { noteMu, noteMerge } from './muheap';
 
 export const HEAVY_FILE = 10e6;
 const HEAVY_CONTENT = 6e6;
-const V = 1;
+const V = 2; // (2: 0.6.0 T21 - pages with unfiltered content parts are merged now; a "nothing to merge" record of 1 is stale)
 
 export const heavyDir = () => path.join(os.tmpdir(), 'Rev Radar', 'heavy');
 
@@ -33,7 +34,7 @@ type MU = any;
 let mu: MU | null = null, muFailed = false;
 async function mupdf(): Promise<MU | null> {
   if (mu || muFailed) return mu;
-  try { mu = await import('mupdf'); } catch (e) { muFailed = true; console.error('MuPDF not available: ' + String((e as Error)?.message || e)); }
+  try { mu = await import('mupdf'); noteMu(mu); } catch (e) { muFailed = true; console.error('MuPDF not available: ' + String((e as Error)?.message || e)); }
   return mu;
 }
 
@@ -210,14 +211,23 @@ async function mergePage(doc: MU, i: number, done: Map<string, unknown>): Promis
     if (done.has(key)) { po.put('Contents', done.get(key)); return true; }
     if (list.some((s) => !s.isStream())) return false;
     if (!opaqueStates(po)) return false;
-    // every part Flate-compressed (as such files are); the parts are one content together - a
-    // path can begin in one and be stroked in the next, so they are merged as one
-    const flate = (s: MU) => { const f = s.get('Filter'); const nm = f.isName() ? f.asName() : f.isArray() && f.length === 1 && f.get(0).isName() ? f.get(0).asName() : ''; return nm === 'FlateDecode' && s.get('DecodeParms').isNull(); };
-    if (!list.every(flate)) return false;
+    // every part Flate-compressed (as such files are) or with no filter at all (0.6.0 T21: what an editor
+    // writes after page numbers, a redaction or a text edit); any other filter leaves the page. The parts
+    // are one content together - a path can begin in one and be stroked in the next, so they are merged as one
+    const filterOf = (s: MU): 'flate' | 'none' | null => {
+      if (!s.get('DecodeParms').isNull()) return null;
+      const f = s.get('Filter');
+      if (f.isNull() || (f.isArray() && f.length === 0)) return 'none';
+      const nm = f.isName() ? f.asName() : f.isArray() && f.length === 1 && f.get(0).isName() ? f.get(0).asName() : '';
+      return nm === 'FlateDecode' ? 'flate' : null;
+    };
+    const kinds = list.map(filterOf);
+    if (kinds.some((k) => k === null)) return false;
     const raws = list.map((s) => s.readRawStream());
     let out: Uint8Array | null = null;
-    try { out = await mergeContent(raws.map((r: MU) => r.asUint8Array())); } finally { for (const r of raws) r.destroy?.(); }
+    try { out = await mergeContent(raws.map((r: MU, k: number) => (kinds[k] === 'flate' ? r.asUint8Array() : { bytes: r.asUint8Array(), flate: false }))); } finally { for (const r of raws) r.destroy?.(); }
     if (!out) return false;
+    noteMerge(); // (DECISIONS 114: this engine's MuPDF memory came from a merge - its bar is 400 MB)
     const d = doc.newDictionary();
     d.put('Filter', doc.newName('FlateDecode'));
     d.put('RRMerged', true);
@@ -245,8 +255,21 @@ const NL = new Uint8Array([10]);
  * content under 10 x `minStrokes` bytes, or about 0.8 x `minStrokes` strokes, is left; then the exact
  * count - `minStrokes` or more strokes, and at least 4 to 1 merged). The quick count is a pass of
  * its own, stopped as soon as the page has passed it: a big page that is not heavy costs an inflate, not a merge.
+ * 0.6.0 T21 (the Editor's 0.13): a part may have no filter (`{ bytes, flate: false }` - an editor writes that
+ * after page numbers, a redaction or a text edit): its bytes are the content, fed in pieces as an inflate
+ * gives them. The output is deflated at level 2 (DECISIONS 104: at level 6 the deflate was 3/4 of the merge's
+ * time - 14.1 s -> 7.3 s on monster-old; level 1 is as fast but its copy 1.21 x as big, level 2's 1.06 x). The
+ * merge's peak is ~160 MB higher than at level 6 (short-lived - not proven why). The log line gives the times.
  */
-export async function mergeContent(parts: Uint8Array[], minStrokes = MIN_STROKES): Promise<Uint8Array | null> {
+export type ContentPart = Uint8Array | { bytes: Uint8Array; flate: boolean };
+const partOf = (p: ContentPart) => (p instanceof Uint8Array ? { bytes: p, flate: true } : p);
+/** an unfiltered part goes to the count and the scan in pieces this big (an inflate's are 256 KB) */
+const PIECE = 1 << 18;
+function* pieces(b: Uint8Array): Generator<Buffer> { for (let at = 0; at < b.length; at += PIECE) yield Buffer.from(b.buffer, b.byteOffset + at, Math.min(PIECE, b.length - at)); }
+/** a part's content in blocks: inflated, or as it is */
+const blocks = (p: ContentPart): AsyncIterable<Buffer> | Iterable<Buffer> => { const q = partOf(p); return q.flate ? inflating(q.bytes) : pieces(q.bytes); };
+
+export async function mergeContent(parts: ContentPart[], minStrokes = MIN_STROKES): Promise<Uint8Array | null> {
   // (the quick count first, as before: an ordinary dense sheet is not read through stroke by stroke
   //  for nothing - inflated and counted in blocks, nothing kept)
   const rough = new RoughStrokes();
@@ -255,31 +278,55 @@ export async function mergeContent(parts: Uint8Array[], minStrokes = MIN_STROKES
   count: for (let k = 0; k < parts.length; k++) {
     if (k) { rough.add(NL); bytes++; }
     // (a heavy page passes the count long before its end)
-    for await (const chunk of inflating(parts[k])) { rough.add(chunk); bytes += chunk.length; if (enough()) break count; }
+    for await (const chunk of blocks(parts[k])) { rough.add(chunk); bytes += chunk.length; if (enough()) break count; }
   }
   if (!enough()) return null;
-  const deflate = zlib.createDeflate({ level: 6, chunkSize: 1 << 20 });
+  const t0 = performance.now();
+  const deflate = zlib.createDeflate({ level: 2, chunkSize: 1 << 20 });
   const out: Buffer[] = [];
   deflate.on('data', (c: Buffer) => out.push(c));
   const ended = new Promise<void>((res, rej) => { deflate.on('end', () => res()); deflate.on('error', rej); });
   ended.catch(() => { /* reported by the await below */ });
   let full = false;
-  const m = new StrokeMergeStream((piece) => { if (!deflate.write(piece)) full = true; });
-  const drain = async () => { if (full) { full = false; await new Promise((r) => deflate.once('drain', r)); } };
+  // (the three times logged: waiting for the input (inflate), the merge itself (scan), the deflate)
+  let tIn = 0, tBody = 0, tWrite = 0, tDrain = 0, tEnd = 0;
+  const m = new StrokeMergeStream((piece) => { const a = performance.now(); if (!deflate.write(piece)) full = true; tWrite += performance.now() - a; });
+  // (a deflate that fails while the merge waits for its drain rejects here - never a wait for ever)
+  const drain = async () => {
+    // (M1, C1: a deflate that failed earlier - while the merge read on - is closed: it emits nothing more, a wait
+    //  for its drain would be for ever)
+    if (deflate.destroyed) throw (deflate.errored as Error | null) ?? new Error('the merged copy could not be written');
+    if (!full) return;
+    full = false;
+    const a = performance.now();
+    await new Promise<void>((res, rej) => {
+      const ok = () => { deflate.off('error', bad); res(); };
+      const bad = (e: Error) => { deflate.off('drain', ok); rej(e); };
+      deflate.once('drain', ok); deflate.once('error', bad);
+    });
+    tDrain += performance.now() - a;
+  };
   try {
     // (a page's content parts are one content: joined with a line break between them)
     for (let k = 0; k < parts.length; k++) {
       if (k) m.push(NL);
-      for await (const chunk of inflating(parts[k])) { m.push(chunk); await drain(); }
+      let mark = performance.now();
+      for await (const chunk of blocks(parts[k])) {
+        const got = performance.now(); tIn += got - mark;
+        m.push(chunk); await drain();
+        mark = performance.now(); tBody += mark - got;
+      }
     }
     m.end();
     deflate.end();
+    const e0 = performance.now();
     await ended;
+    tEnd = performance.now() - e0;
   } catch (e) { deflate.destroy(); throw e; }
   // (the exact count decides: `minStrokes` or more strokes, merged at least 4 to 1)
   if (m.strokesIn < minStrokes || m.strokesOut * 4 > m.strokesIn) return null;
   const z = Buffer.concat(out);
-  console.error(`heavy page: ${m.strokesIn} strokes -> ${m.strokesOut}, ${Math.round(m.bytesIn / 1e6)} -> ${Math.round(m.bytesOut / 1e6)} MB`);
+  console.error(`heavy page: ${m.strokesIn} strokes -> ${m.strokesOut}, ${Math.round(m.bytesIn / 1e6)} -> ${Math.round(m.bytesOut / 1e6)} MB, ${Math.round(performance.now() - t0)} ms (inflate ${Math.round(tIn)}, scan ${Math.round(tBody - tWrite - tDrain)}, deflate ${Math.round(tWrite + tDrain + tEnd)} ms)`);
   return new Uint8Array(z.buffer, z.byteOffset, z.byteLength);
 }
 

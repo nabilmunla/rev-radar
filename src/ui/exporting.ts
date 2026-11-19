@@ -1,9 +1,13 @@
 // Exports: the marked-up PDF (new sheets with numbered clouds + a summary page) and the
 // Excel list of every sheet with its status and what changed.
 import { rr } from './api';
-import { freshExporter, closeExporter } from './engines';
+import { freshExporter, closeExporter, exporter } from './engines';
 import { ui, realAreas, areaLabels, statusLabel, movedNote, moveWords, seamTitle, where, plainError, toast, bump, textGroups, groupOfArea, isFigText, type Pair, type AreaR } from './model';
 import { writeXlsx, type XCell } from './xlsxwrite';
+
+/** what Stop takes away: the parts this run finished and the half-written one (its .part.pdf) - never the file the
+ *  part being written will become: until it is finished that name is a file of an earlier export (ritual 19 Nov) */
+export const stopDiscard = (files: string[], target: string): string[] => [...files, target.replace(/\.pdf$/i, '') + '.part.pdf'];
 
 /** where to save (tests set this to skip the dialog) */
 async function savePath(opts: Parameters<typeof rr.saveDialog>[0]): Promise<string | null> {
@@ -134,6 +138,8 @@ const counted = (p: Pair) => !!p.result && p.status !== 'error';
 /** one PDF at a time: a second export started meanwhile closed the first one's engine (it never
  *  finished, and said nothing) */
 let pdfBusy = false;
+/** the PDF being written, for the busy line (T23): what it is doing, since when, and Stop */
+export const exportJob: { cur: { what: string; t0: number; stop(): void } | null } = { cur: null };
 export async function exportPdf(which: 'changed' | 'all' | 'one', one?: Pair) {
   if (pdfBusy) { toast('A PDF is being written already - wait for it to finish', 'warn'); return; }
   pdfBusy = true;
@@ -166,13 +172,26 @@ async function writePdf(which: 'changed' | 'all' | 'one', one?: Pair) {
   // ("… (part 1).pdf", "… (part 2).pdf"), each part from a fresh engine
   const partName = (k: number) => out.replace(/\.pdf$/i, '') + ` (part ${k}).pdf`;
   const files: string[] = [], skipped: string[] = [];
-  let rest = sheets, pages = 0, bytes = 0;
+  let rest = sheets, pages = 0, bytes = 0, target = out, stopped = false;
   void rr.busy(out);
+  // Stop (T23): the engine ends, and the files this run made - finished parts, the half-written one - are taken away
+  const job = {
+    what: `Writing ${list.length} sheet${list.length === 1 ? '' : 's'} to a PDF…`, t0: performance.now(),
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      exportJob.cur = null; bump();
+      exporter.detach();
+      void rr.engineStop('export', stopDiscard(files, target)).then(() => toast('Stopped - nothing was saved', undefined, 5000));
+    },
+  };
+  exportJob.cur = job; bump();
   try {
     for (let k = 1; rest.length; k++) {
-      if (k > 1) toast(`Writing part ${k} (${rest.length} sheet${rest.length === 1 ? '' : 's'} to go)…`, undefined, 3000);
+      if (k > 1) { toast(`Writing part ${k} (${rest.length} sheet${rest.length === 1 ? '' : 's'} to go)…`, undefined, 3000); job.what = `Writing part ${k} (${rest.length} sheet${rest.length === 1 ? '' : 's'} to go)…`; bump(); }
       const eng = await freshExporter();
-      const target = k === 1 ? out : partName(k);
+      if (stopped) return;
+      target = k === 1 ? out : partName(k);
       const r = await eng.call<{ pages: number; bytes: number; done: number; skipped: string[] }>('exportPdf', [rest, target, k === 1 ? title : `${title} (part ${k})`, k === 1 ? summary : null]);
       skipped.push(...r.skipped);
       rest = rest.slice(Math.max(1, r.done));
@@ -187,9 +206,12 @@ async function writePdf(which: 'changed' | 'all' | 'one', one?: Pair) {
     if (skipped.length) toast(`${skipped.length} sheet${skipped.length === 1 ? '' : 's'} could not be read and ${skipped.length === 1 ? 'is' : 'are'} not in the PDF: ${skipped.slice(0, 3).join('; ')}${skipped.length > 3 ? ' …' : ''}`, 'warn', 15000);
     if (files.length) void rr.openPath(files[0]);
   } catch (e) {
-    toast('Could not write the PDF: ' + plainError(e), 'err', 9000);
+    // (Stop ends the engine: its call fails - that is the answer, not a fault)
+    if (!stopped) toast('Could not write the PDF: ' + plainError(e), 'err', 9000);
   } finally {
     void rr.busy('');
+    if (exportJob.cur === job) exportJob.cur = null;
     void closeExporter();
+    bump();
   }
 }

@@ -19,6 +19,9 @@ const col = (i: number) => { let s = ''; i++; while (i) { const r = (i - 1) % 26
 // style index in cellXfs below
 const STYLE: Record<XStyle, number> = { h: 1, b: 2, n2: 3, n3: 4, n0: 5, b2: 6, i: 7, pct: 8 };
 
+/** the most cells in a row - a loop: Math.max(...rows) throws past ~125,000 rows (the Editor 0.13's widest(), 0.6.0 T24) */
+function widest(rows: XCell[][]): number { let w = 0; for (const r of rows) if (r.length > w) w = r.length; return w; }
+
 export function writeXlsx(sheets: XSheet[]): Uint8Array {
   const files: Record<string, Uint8Array> = {};
   const names = sheets.map((s, i) => (s.name.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Sheet' + (i + 1)));
@@ -32,7 +35,7 @@ export function writeXlsx(sheets: XSheet[]): Uint8Array {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>` +
       names.map((n, i) => `<sheet name="${esc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') +
       `</sheets>` +
-      (sheets.some((s) => s.header) ? `<definedNames>` + sheets.map((s, i) => (s.header && s.rows.length > s.header ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${esc(names[i])}'!$A$${s.header}:$${col(Math.max(0, ...s.rows.map((r) => r.length)) - 1 || 0)}$${s.rows.length}</definedName>` : '')).join('') + `</definedNames>` : '') +
+      (sheets.some((s) => s.header) ? `<definedNames>` + sheets.map((s, i) => (s.header && s.rows.length > s.header ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${esc(names[i])}'!$A$${s.header}:$${col(widest(s.rows) - 1 || 0)}$${s.rows.length}</definedName>` : '')).join('') + `</definedNames>` : '') +
       `</workbook>`,
   );
   files['xl/_rels/workbook.xml.rels'] = strToU8(
@@ -79,7 +82,7 @@ export function writeXlsx(sheets: XSheet[]): Uint8Array {
     });
     out.push('</sheetData>');
     if (sh.header && sh.rows.length > sh.header) {
-      const w = Math.max(...sh.rows.map((r) => r.length));
+      const w = widest(sh.rows);
       out.push(`<autoFilter ref="A${sh.header}:${col(w - 1)}${sh.rows.length}"/>`);
     }
     out.push('</worksheet>');

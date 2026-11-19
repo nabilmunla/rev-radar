@@ -59,9 +59,10 @@ export function readIssue(pages: ReadPage[], wits: ReadPage[] = []): { read: Map
 /**
  * Which leftover sheets the numbers pair (by the refs; the content veto is `pairByContent`'s), and how
  * each sheet whose number was read is listed: the number ("number (p.N)" when it is on two pages of
- * the issue) and the title read.
+ * the issue) and the title read. The third value of a pair: either number was read at a spot whose
+ * numbers repeat (Sheet.repeats, 0.6.0 DECISIONS 93) - `pairByContent` then wants the content to agree.
  */
-export function pairBySheetNo(olds: ReadPage[], news: ReadPage[], witO: ReadPage[] = [], witN: ReadPage[] = []): { pairs: [SheetRef, SheetRef][]; names: Map<SheetRef, { no: string; title: string }> } {
+export function pairBySheetNo(olds: ReadPage[], news: ReadPage[], witO: ReadPage[] = [], witN: ReadPage[] = []): { pairs: [SheetRef, SheetRef, boolean][]; names: Map<SheetRef, { no: string; title: string }> } {
   const o = readIssue(olds, witO), n = readIssue(news, witN);
   const count = (x: { read: Map<SheetRef, Sheet>; witRead: Map<SheetRef, Sheet> }) => {
     const m = new Map<string, number>();
@@ -75,11 +76,11 @@ export function pairBySheetNo(olds: ReadPage[], news: ReadPage[], witO: ReadPage
   }
   const newBy = new Map<string, SheetRef>();
   for (const [r, s] of n.read) if (s.key && cn.get(s.key) === 1) newBy.set(s.key, r);
-  const pairs: [SheetRef, SheetRef][] = [];
+  const pairs: [SheetRef, SheetRef, boolean][] = [];
   for (const [r, s] of o.read) {
     if (!s.key || co.get(s.key) !== 1) continue;
     const m = newBy.get(s.key);
-    if (m) pairs.push([r, m]);
+    if (m) pairs.push([r, m, !!(s.repeats || n.read.get(m)?.repeats)]);
   }
   return { pairs, names };
 }

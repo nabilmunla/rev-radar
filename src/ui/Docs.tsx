@@ -4,7 +4,10 @@
 import { useEffect, useRef } from 'react';
 import { bump, useUI } from './model';
 import { Icon } from './icons';
-import { startDocs, docTicksChanged, docVisible, docMatches, docSummary, docNeedsCheck, docMates, docTickGroup, type DocFilter, type DocSession } from './docsrun';
+import { usePanels, SidePanel, togglePanel, panelTip } from './PanelSize';
+import { HScroll } from './Scroller';
+import { BusyLine } from './busy';
+import { startDocs, stopDocs, docTicksChanged, docVisible, docMatches, docSummary, docNeedsCheck, docMates, docTickGroup, type DocFilter, type DocSession } from './docsrun';
 import { wordDiff } from '../engine/boq';
 import type { DocEntry, DocLine } from '../engine/docs';
 import { DocsSide, FigChip, SameChange } from './DocsSide';
@@ -36,6 +39,7 @@ export function DocsResults() {
   const all = s.result?.entries ?? [];
   const cur = s.sel >= 0 ? all[s.sel] : undefined;
   const listRef = useRef<HTMLDivElement>(null);
+  const pn = usePanels('docs', { right: view === 'side' });
   const select = (e?: DocEntry) => { if (!e) return; s.sel = all.indexOf(e); bump(); };
   const step = (d: 1 | -1) => { if (!list.length) return; const k = cur ? list.indexOf(cur) : -1; select(list[k < 0 ? (d > 0 ? 0 : list.length - 1) : Math.max(0, Math.min(list.length - 1, k + d))]); };
   /** Shift + R: this change and every place it was made, ticked - and on */
@@ -47,24 +51,28 @@ export function DocsResults() {
       const t = e.target as HTMLElement | null;
       if (e.ctrlKey || e.metaKey || e.altKey || t?.closest?.('textarea, select, [contenteditable]') || (t?.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'range'].includes((t as HTMLInputElement).type))) return;
       if (t?.tagName === 'INPUT') t.blur();
-      const k = e.key.toLowerCase();
+      if (document.querySelector('.scrim')) return;
+      // [ and ] by the key's place as well (other keyboard layouts); ] does nothing in the side view (no details there)
+      const k = e.code === 'BracketLeft' ? '[' : e.code === 'BracketRight' ? ']' : e.key.toLowerCase();
       if (k === 'n' || e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); step(1); }
       else if (k === 'p' || e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+      else if (k === '[') togglePanel('docs', 'left');
+      else if (k === ']') { if (view === 'list') togglePanel('docs', 'right'); }
       else if (k === 'r' && !e.repeat) { e.preventDefault(); if (e.shiftKey) tickAll(); else tick(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
-  useEffect(() => { listRef.current?.querySelector('.srow.on')?.scrollIntoView({ block: 'nearest' }); }, [s.sel, s.filter]);
+  useEffect(() => { listRef.current?.querySelector('.srow.on')?.scrollIntoView({ block: 'nearest' }); }, [s.sel, s.filter, st.panels.docs.left]);
 
-  if (s.phase === 'running') return <div className="empty"><span className="dot busy" /> {s.note || 'Reading the documents and pairing their paragraphs… (a 3,000-page book takes about half a minute)'}</div>;
+  if (s.phase === 'running') return <div className="empty"><BusyLine what={s.note || 'Reading the documents and pairing their paragraphs… (a 3,000-page book takes about half a minute)'} since={s.t0 ?? performance.now()} onStop={stopDocs} stopTitle="Stop and go back to the two issues - nothing is kept" /></div>;
   if (s.phase === 'error') return <div className="empty"><h3>The documents could not be compared</h3><p>{s.error}</p><button className="btn" onClick={() => void startDocs(s.oldSet, s.newSet)}><Icon n="refresh" size={14} /> Try again</button></div>;
   const r = s.result!;
   const count = (f: DocFilter) => all.filter((e) => docMatches(e, f, s)).length;
   const todo = count('todo');
   return (
-    <div className={'results' + (st.panels.left ? '' : ' noleft') + (st.panels.right && view === 'list' ? '' : ' noright')}>
-      {st.panels.left && (
+    <div className="results pw" style={pn.style} ref={pn.ref}>
+      <SidePanel side="left" p={pn.left}>
         <aside className="left">
           <div className="filters">
             {FILTERS.map(([f, label, tip]) => { const n = count(f); if (!n && f !== 'changes' && f !== s.filter) return null; return <button key={f} className={'fchip' + (s.filter === f ? ' on' : '')} title={tip} onClick={() => { s.filter = f; bump(); }}>{label} <span className="n">{n}</span></button>; })}
@@ -82,18 +90,23 @@ export function DocsResults() {
               </button>); })}
           </div>
         </aside>
-      )}
+      </SidePanel>
       <main className={'center boq-center' + (view === 'side' ? ' side' : '')}>
         <div className="boq-bar">
-          <div className="seg" role="tablist">
-            <button className={view === 'side' ? 'on' : ''} onClick={() => setView('side')} title="The old and new issues' pages side by side, the changes marked on them: click one, the other side goes to it">Side by side</button>
-            <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} title="The change chosen on the left, old and new word by word, with the totals and files on the right">Details</button>
-          </div>
-          <span className="faint">{r.paras.old.toLocaleString()} paragraphs old · {r.paras.neu.toLocaleString()} new · {todo ? `${todo} of ${count('changes')} to review` : count('changes') ? 'all changes ticked off' : 'nothing changed'}</span>
+          <button className={'btn sm icon panelbtn' + (st.panels.docs.left ? '' : ' on')} onClick={() => togglePanel('docs', 'left')} title={panelTip('left', st.panels.docs.left)}><Icon n="panelleft" size={16} /></button>
+          <HScroll className="boq-tools" wrapClass="boq-scroll">
+            <div className="seg" role="tablist">
+              <button className={view === 'side' ? 'on' : ''} onClick={() => setView('side')} title="The old and new issues' pages side by side, the changes marked on them: click one, the other side goes to it">Side by side</button>
+              <button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')} title="The change chosen on the left, old and new word by word, with the totals and files on the right">Details</button>
+            </div>
+            <span className="faint">{r.paras.old.toLocaleString()} paragraphs old · {r.paras.neu.toLocaleString()} new · {todo ? `${todo} of ${count('changes')} to review` : count('changes') ? 'all changes ticked off' : 'nothing changed'}</span>
+          </HScroll>
+          {view === 'list' && <button className={'btn sm icon panelbtn' + (st.panels.docs.right ? '' : ' on')} onClick={() => togglePanel('docs', 'right')} title={panelTip('right', st.panels.docs.right)}><Icon n="panelright" size={16} /></button>}
         </div>
         {view === 'side' ? <DocsSide s={s} /> : cur ? <Detail e={cur} s={s} /> : <div className="empty">Choose a change on the left (N goes to the next one).</div>}
       </main>
-      {st.panels.right && view === 'list' && (
+      {view === 'list' && (
+        <SidePanel side="right" p={pn.right}>
         <aside className="right"><div className="panel">
           <h3>Document comparison</h3>
           <div className="sumtable">
@@ -111,6 +124,7 @@ export function DocsResults() {
           <div className="bfiles"><div><span className="faint">Old:</span> {s.oldSet.files.map((f) => f.rel).join(', ')}</div><div><span className="faint">New:</span> {s.newSet.files.map((f) => f.rel).join(', ')}</div></div>
           {r.notes.slice(0, 8).map((n, i) => <div key={i} className="warnbox">{n}</div>)}
         </div></aside>
+        </SidePanel>
       )}
     </div>
   );

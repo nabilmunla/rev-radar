@@ -215,3 +215,20 @@ test('what\'s new after a setup run over an older copy: this version\'s own note
   // (the build writes this version's notes into dist/)
   assert.ok(/release-notes\.json/.test(fs.readFileSync(path.join(import.meta.dirname, '../scripts/build.mjs'), 'utf8')));
 });
+
+// 0.6.0 T24 (the Editor 0.13's sweep, its Excel writer): Math.max(...rows) throws "Maximum call stack size exceeded" /
+// RangeError past ~125,000 arguments. A register of 130,000 rows, a summary of 130,000 rows, a page of 70,000 words -
+// each must go through. Fails on 0.5.1 (all three).
+test('T24: very long tables - 130,000-row register and summary, a page of 70,000 words', async () => {
+  const { writeXlsx } = await import('../src/ui/xlsxwrite');
+  const { colWidths } = await import('../src/engine/report');
+  const { pdfBook } = await import('../src/engine/pdftable');
+  const rows = Array.from({ length: 130_000 }, (_, i) => [`A-${i}`, `Item ${i}`, i % 7 ? 'Changed' : 'Added']);
+  const x = writeXlsx([{ name: 'Changes', header: 1, rows: [['Ref', 'Text', 'What'], ...rows] } as never]);
+  assert.ok(x.length > 100_000, 'register written');
+  const w = colWidths(rows, 500, 8);
+  assert.equal(w.length, 3);
+  const words = Array.from({ length: 70_000 }, (_, i) => ({ s: i % 9 ? 'word' : '1.5', x0: 40 + (i % 60) * 9, x1: 46 + (i % 60) * 9, y0: 40 + Math.floor(i / 60) * 0.6, y1: 46 + Math.floor(i / 60) * 0.6 }));
+  const b = pdfBook('x.pdf', 3, () => words as never);
+  assert.ok(b.sheets.length >= 0, 'read with no RangeError');
+});

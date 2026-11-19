@@ -188,6 +188,19 @@ test('converter: the path with a quote is escaped in the script', async () => {
   assert.ok(script.includes("it''s a spec.docx"), script.slice(0, 300));
 });
 
+// 0.6.0 T30: the converter's name kept beside the cached PDF - a PDF made in an earlier session says by which
+test('T30 converter: a PDF made in an earlier session says by which converter', async () => {
+  const dir = tmp(), f = mkDocx(dir, 'spec.docx');
+  const run = async (_c: string, args: string[]) => { fs.writeFileSync(/\$out = '([^']+)'/.exec(decode(args))![1], 'x'); return { code: 0, stdout: '', stderr: '', timedOut: false }; };
+  const r1 = await wp().makeConverter({ platform: 'win32', env: {}, tmpdir: dir, run }).convert(f) as { by?: string; earlier?: boolean };
+  assert.equal(r1.by, 'Word');
+  // (a new session, the same cache)
+  const r2 = await wp().makeConverter({ platform: 'win32', env: {}, tmpdir: dir, run: async () => { throw new Error('not run: cached'); } }).convert(f) as { by?: string; earlier?: boolean; cached?: boolean };
+  assert.equal(r2.cached, true);
+  assert.equal(r2.by, 'Word');
+  assert.equal(r2.earlier, true);
+});
+
 test('converter: Word fails -> LibreOffice (Program Files too on Windows); both fail -> none with the reasons', async () => {
   const dir = tmp(), f = mkDocx(dir), calls: Call[] = [];
   const lo = path.join(dir, 'LibreOffice', 'program', 'soffice.exe');
