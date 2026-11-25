@@ -308,9 +308,12 @@ export function renderRGBA(id: string, pg: number, m: number[], w: number, h: nu
   const d = mustDoc(id);
   const p = page(d, pg);
   if (w <= 0 || h <= 0) return new Uint8ClampedArray(0);
-  const bmp = q.FPDFBitmap_Create(w, h, 0);
-  if (!bmp) throw new Error('Out of memory for a ' + w + '×' + h + ' picture');
-  const mat = malloc(24), clip = malloc(16);
+  // (the small buffers first: an out-of-memory throw for one of them must not strand the bitmap - 0.6.1 T37, DeepSeek 6)
+  const mat = malloc(24);
+  let clip = 0, bmp = 0;
+  try { clip = malloc(16); } catch (e) { free(mat); throw e; }
+  bmp = q.FPDFBitmap_Create(w, h, 0);
+  if (!bmp) { free(mat); free(clip); throw new Error('Out of memory for a ' + w + '×' + h + ' picture'); }
   try {
     q.FPDFBitmap_FillRect(bmp, 0, 0, w, h, 0xffffffff);
     const F = new Float32Array(M().HEAPU8.buffer, mat, 6);

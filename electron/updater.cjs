@@ -223,7 +223,7 @@ function create({ version, readSettings, writeSettings, log, send }) {
     const skipped = skipList().includes(latest.version);
     const show = !!manual || (laterFor !== latest.version && !skipped);
     const base = { available: latest.version, notes: latest.notes, groups: latest.groups, kind: latest.kind, size: latest.pkg ? latest.pkg.size : 0, err: '', note: '' };
-    if (full) { set({ ...base, state: 'setup', setupPath: setupFor(j.setupFound, latest.version), show }); return snapshot(); }
+    if (full) { set({ ...base, state: 'setup', setupPath: setupFor(r.latest.setupFound, latest.version), show }); return snapshot(); }
     if (!latest.pkg || !/^[0-9a-f]{64}$/.test(latest.pkg.sha256)) { set({ state: 'error', err: 'latest.json lists no package for this update', show: !!manual }); return snapshot(); }
     // already here (downloaded earlier, or the person went back from it)?
     if (list().some((c) => !c.builtin && c.version === latest.version)) { set({ ...base, state: 'ready', show }); return snapshot(); }

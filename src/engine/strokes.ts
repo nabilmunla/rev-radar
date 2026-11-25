@@ -111,6 +111,7 @@ export function mergeStrokes(src: Uint8Array, minStrokes = MIN_STROKES): MergeRe
         flushPending(); flushPath();
         emit(segStart, i);
         segStart = i;
+        strokesOut++; // (a stroke written as it was is a stroke out too - 0.6.1 T38, DeepSeek 15)
       }
       continue;
     }

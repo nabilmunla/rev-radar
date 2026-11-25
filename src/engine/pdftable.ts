@@ -5,6 +5,7 @@
 import type { Book, Sheet, SheetRow, Val } from './sheets';
 import type { Word } from './pdfium';
 import { knownUnit } from './boq';
+import { readNum, styleOf, type NumStyle } from './numread';
 
 const HEAD: [Exclude<keyof Cols, 'other'>, RegExp][] = [
   ['item', /^(item|items|ref\.?|no\.?|s\.?no\.?|sr\.?)$/i], ['desc', /^description$/i], ['qty', /^(qty\.?|quantity|quantities)$/i],
@@ -227,7 +228,8 @@ export function pdfBook(name: string, pageCount: number, pageWords: (i: number) 
       const cx: number[] = [];
       for (let k = 0; k < 12; k += 2) cx.push(r1(Math.min(...ls2.map((l) => l.cx[k]))), r1(Math.max(...ls2.map((l) => l.cx[k + 1]))));
       const bx = [r1(Math.min(...ls2.map((l) => l.x0))), r1(Math.min(...ls2.map((l) => l.y0))), r1(Math.max(...ls2.map((l) => l.x1))), r1(Math.max(...ls2.map((l) => l.y1))), ...cx];
-      rows.push({ r: r++, hidden: false, c: c.map((v, k) => (v === null ? null : k >= 2 && k !== 3 ? numOr(v) : v)), pg: p, bx, ...(fromScan ? { ocr: true } : {}) });
+      // (number cells kept as written here: the file's decimal style is known only when all its rows are read - T39)
+      rows.push({ r: r++, hidden: false, c: c.map((v, k) => (v === null ? null : v)), pg: p, bx, ...(fromScan ? { ocr: true } : {}) });
     };
     for (const b of blocks) {
       // (a heading in capitals stays a line of its own - it is the section the items are read under)
@@ -267,6 +269,11 @@ export function pdfBook(name: string, pageCount: number, pageWords: (i: number) 
     }
   }
   flush();
+  // (0.6.1 T39: the PDF's decimal style from all its quantity / rate / amount cells, then those cells read in it)
+  const style = styleOf(sheets.flatMap((sh) => sh.rows.flatMap((row) => [row.c[2], row.c[4], row.c[5]])));
+  // (evidence from the cells as written - squeezed, "1,200 50" would read as comma evidence: E3, DECISIONS 161)
+  for (const sh of sheets) sh.numStyle = style;
+  for (const sh of sheets) for (const row of sh.rows) row.c = row.c.map((v, k) => (v === null ? null : k >= 2 && k !== 3 ? numOr(v, style) : v));
   return { sheets: sheets.length ? sheets : [{ name, hidden: false, rows: [], hiddenCols: [] }] };
 }
 
@@ -276,4 +283,7 @@ const BILL_LINE = /^(?:bill\s*(?:no\.?|nr\.?|number)?\s*[:.-]?\s*(\d+[a-z]?|[a-z
 const CONTD_LINE = /[,;:\s-]*\(?\b(cont['*\u2019]?d|continued|cont(?=\.))\.?\)?\.?\s*$/i;
 /** a page's own reference, as a footer: "Sec J/Page 10/R3" (a page re-issued: /R4 on it alone), "P/23", "Page 4 of 9" */
 const PAGE_LINE = /^(?:sec(?:tion)?\.?\s*[a-z0-9]{1,4}\s*\/\s*page\s*\d+(?:\s*[-\u2013]\s*\d+)?(?:\s*\/\s*r(?:ev)?\.?\s*\d+)?|p\s*\/\s*\d+|page\s*\d+(?:\s*of\s*\d+)?)$/i;
-const numOr = (s: string): Val => (/^-?[\d,]*\.?\d+$/.test(s.replace(/\s/g, '')) ? Number(s.replace(/[\s,]/g, '')) : s);
+/** (0.6.1 T39, DECISIONS 141) a number cell in the file's style, else its text - the parser boq.ts uses */
+const numOr = (s: Val, style: NumStyle): Val => (typeof s === 'string' ? readNum(squeeze(s), style) ?? s : s);
+/** PDF text can break a number with stray spaces ("12,000 ,000.00") - 0.6.0 read through them, so does this */
+const squeeze = (s: Val): Val => (typeof s === 'string' ? s.replace(/\s/g, '') : s);

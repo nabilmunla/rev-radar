@@ -470,3 +470,5 @@ body.pw-dragging, body.pw-dragging * { cursor: col-resize !important; user-selec
 .floatline { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); z-index: 45; display: flex; flex-direction: column; gap: 8px; align-items: center; max-width: 640px; }
 .floatline .busyline, .floatline .stuckline { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; box-shadow: var(--shadow-lg); font-size: 12.5px; }
 .floatline .stuckline { display: flex; align-items: center; border-color: var(--warn); }
+/* (0.6.1 T35) the technical line under a plain message, small */
+.empty .detail { font-size: 12px; color: var(--text-2); user-select: text; }

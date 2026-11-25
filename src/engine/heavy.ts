@@ -238,10 +238,17 @@ async function mergePage(doc: MU, i: number, done: Map<string, unknown>): Promis
   } catch (e) {
     const why = String((e as Error)?.message || e);
     console.error(`page ${i + 1} not merged: ${why}`);
-    // (out of memory, a file busy: may work next time - not written down; a page that can't be merged
-    //  - a stream zlib won't read, say - is left as it is and the others merged, as before)
-    return /memory|alloc|ENOMEM|EBUSY|EAGAIN|EMFILE/i.test(why) ? 'failed' : false;
+    return mergeFailure(e);
   }
+}
+
+/** (0.6.1 T38, DECISIONS 143) a failed merge: `false` = left as it is and written down - only a stream zlib refuses
+ *  for what is in it (the same answer every time); anything else ('failed') is not written down, merged next time */
+export function mergeFailure(e: unknown): false | 'failed' {
+  const code = String((e as { code?: unknown })?.code ?? ''), why = String((e as Error)?.message || e);
+  if (code === 'Z_DATA_ERROR' || code === 'Z_STREAM_ERROR') return false;
+  if (!code && /incorrect header check|invalid (stored block lengths|distance|block type|code lengths|literal|bit length)|too many length|header crc mismatch|incorrect (data|length) check/i.test(why)) return false;
+  return 'failed';
 }
 
 const NL = new Uint8Array([10]);

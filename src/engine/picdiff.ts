@@ -282,7 +282,8 @@ export function pairPics(O: Pic[], N: Pic[], ido: (p: Pic) => string, idn: (p: P
   // (the other side's furniture counts: a logo on two pages of one issue and on every page of the other is the same logo)
   const shaN = new Set([...N.filter((p) => !p.whole).map((p) => p.sha), ...furn.n]), shaO = new Set([...O.filter((p) => !p.whole).map((p) => p.sha), ...furn.o]);
   for (const i of lo) { if (!O[i].whole && shaN.has(O[i].sha)) { same++; continue; } out.push({ what: 'removed', o: at(O[i], [O[i].box]), whole: true, text: false, why: [] }); }
-  for (const j of ln) { if (!N[j].whole && shaO.has(N[j].sha)) continue; out.push({ what: 'added', n: at(N[j], [N[j].box]), whole: true, text: false, why: [] }); }
+  // (and counted, as the old side's are: once old / twice new is the mirror of twice old / once new - 0.6.1 T40)
+  for (const j of ln) { if (!N[j].whole && shaO.has(N[j].sha)) { same++; continue; } out.push({ what: 'added', n: at(N[j], [N[j].box]), whole: true, text: false, why: [] }); }
   return { entries: out, same };
 }
 

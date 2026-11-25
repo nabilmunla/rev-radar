@@ -10,7 +10,7 @@ export interface SheetRow {
   /** a PDF's row: where it is on its page (points, top-down) - x0, y0, x1, y1, then each cell's x0, x1 (NaN: empty) */
   bx?: number[];
 }
-export interface Sheet { name: string; hidden: boolean; rows: SheetRow[]; hiddenCols: number[] }
+export interface Sheet { name: string; hidden: boolean; rows: SheetRow[]; hiddenCols: number[]; /** (0.6.1 T39) a PDF's decimal style, decided for the whole file */ numStyle?: 'dot' | 'comma' }
 export interface Book { sheets: Sheet[] }
 
 /** a workbook from its bytes (.xlsx / .xlsm / .xls - told by what the bytes are, not the name) */
@@ -93,7 +93,11 @@ function readSheetXml(name: string, hidden: boolean, xml: string, sst: string[])
         case 'str': val = v != null ? unxml(v) : null; break;
         case 'b': val = v === '1'; break;
         case 'e': val = v != null ? '#' + unxml(v).replace(/^#/, '') : null; break;
-        default: val = v != null && v !== '' ? Number(v) : null;
+        // (a date written as a date - ISO text - is its serial number, as the same date stored as a styled number: 0.6.1 T41,
+        //  DECISIONS 147; text that is no date stays text)
+        case 'd': val = v != null && v !== '' ? dateSerial(unxml(v)) ?? unxml(v) : null; break;
+        // (and a number cell that holds no number is its text - never NaN)
+        default: val = v != null && v !== '' ? (Number.isFinite(Number(v)) ? Number(v) : unxml(v)) : null;
       }
       if (val !== null && val !== '') { while (c.length < col) c.push(null); c[col] = val; }
       col++;
@@ -106,6 +110,19 @@ function readSheetXml(name: string, hidden: boolean, xml: string, sst: string[])
 // ---------------------------------------------------------------- .xls (BIFF8)
 
 /** the "Workbook" stream of an OLE compound file */
+/** an ISO date (and time) as Excel's serial: days since 30 Dec 1899, the time a fraction - the wall clock as written, a zone
+ *  suffix ignored (Excel keeps no zone). Not a date: null. The 1904 date system is not handled (OPEN-QUESTIONS) */
+export function dateSerial(t: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?)?(?:Z|[+-]\d{2}:?\d{2})?$/.exec(t.trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi, se] = [+m[1], +m[2], +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0)];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 24 || mi > 59 || se >= 61) return null;
+  const day = Date.UTC(y, mo - 1, d);
+  if (new Date(day).getUTCDate() !== d) return null;
+  const serial = (day - Date.UTC(1899, 11, 30)) / 86400000;
+  return h || mi || se ? serial + (h * 3600 + mi * 60 + se) / 86400 : serial;
+}
+
 function cfbStream(b: Uint8Array, want: RegExp): Uint8Array {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const u32 = (o: number) => dv.getUint32(o, true);
@@ -125,7 +142,8 @@ function cfbStream(b: Uint8Array, want: RegExp): Uint8Array {
   const read = (start: number, size: number) => {
     const out = new Uint8Array(size);
     let at = 0;
-    for (const s of chain(start, fat)) { if (at >= size) break; const n = Math.min(sz, size - at); out.set(b.subarray(sec(s), sec(s) + n), at); at += n; }
+    // (a sector past the file's end - cut short at a sector boundary, the chain itself whole - is a short piece: 0.6.1 T41)
+    for (const s of chain(start, fat)) { if (at >= size) break; const n = Math.min(sz, size - at); const p = b.subarray(sec(s), sec(s) + n); if (p.length < n) break; out.set(p, at); at += n; }
     if (at < size) throw new Error('The workbook file is cut short');
     return out;
   };
@@ -152,7 +170,8 @@ function cfbStream(b: Uint8Array, want: RegExp): Uint8Array {
   for (let i = 0; i + 4 <= mf.length; i += 4) mfat.push(new DataView(mf.buffer).getUint32(i, true));
   const out = new Uint8Array(e.size);
   let at = 0;
-  for (const s of chain(e.start, mfat)) { if (at >= e.size) break; const n = Math.min(msz, e.size - at); out.set(mini.subarray(s * msz, s * msz + n), at); at += n; }
+  for (const s of chain(e.start, mfat)) { if (at >= e.size) break; const n = Math.min(msz, e.size - at); const p = mini.subarray(s * msz, s * msz + n); if (p.length < n) break; out.set(p, at); at += n; }
+  if (at < e.size) throw new Error('The workbook file is cut short');
   return out;
 }
 

@@ -173,7 +173,8 @@ export function Results() {
       const nx = l.find((p) => s.pairs.indexOf(p) > at) || l[0];
       if (!nx) {
         const left = s.pairs.filter((p) => needsReview(p) && !p.reviewed && p !== pair).length;
-        if (!done || !left) toast(left ? `Nothing more to review in this list - ${left} more in other lists (To review shows them)` : (pair && !pair.reviewed && needsReview(pair) ? `${pair.key} is the last sheet to review` : list.some(isStop) || s.pairs.some(needsReview) ? 'Every sheet to review is ticked off' : 'No changed sheets here') + stillOpen(), 'ok', 6000);
+        // (T43, 151) unless this sheet is itself still to review AND sheets are left elsewhere: then the warning just shown is the whole message
+        if (!(pair && !pair.reviewed && needsReview(pair) && left)) toast(left ? `Nothing more to review in this list - ${left} more in other lists (To review shows them)` : (pair && !pair.reviewed && needsReview(pair) ? `${pair.key} is the last sheet to review` : list.some(isStop) || s.pairs.some(needsReview) ? 'Every sheet to review is ticked off' : 'No changed sheets here') + stillOpen(), 'ok', 6000);
         bump(); return;
       }
       select(nx, areasOf(nx)[0] ?? -1);
@@ -285,7 +286,7 @@ export function Results() {
       else if (k === 'r' && e.shiftKey) {
         // (T8) Shift + R: the change shown, ticked on every sheet it was made on
         const p = cur();
-        if (p && !e.repeat) { const gs = textGroups(ui.session?.pairs ?? []); const g = (ui.area >= 0 ? groupOfArea(gs, p, ui.area) : null) ?? realAreas(p).map((i) => groupOfArea(gs, p, i)).find(Boolean); if (g) { tickGroup(g); const nx = nextToReview(p); if (nx && p.reviewed) select(nx); } else toast('This change is not on other sheets - R ticks the sheet off', 'ok', 3500, undefined, 'ticked'); }
+        if (p && !e.repeat) { const gs = textGroups(ui.session?.pairs ?? []); if (ui.area < 0) toast('No change is open - Shift + R ticks the change shown, on every sheet it was made on', 'ok', 3500, undefined, 'ticked'); else { const g = groupOfArea(gs, p, ui.area); if (g) { tickGroup(g); const nx = nextToReview(p); if (nx && p.reviewed) select(nx); } else toast('This change is not on other sheets - R ticks the sheet off', 'ok', 3500, undefined, 'ticked'); } }
       }
       else if (k === 'r') { const p = cur(); if (p && !e.repeat) markReviewed(p); }
       else if (k === '[') togglePanel('drawings', 'left');

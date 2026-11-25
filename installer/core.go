@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -570,4 +571,42 @@ func runningVersion(installed, runtime string) string {
 		}
 	}
 	return best
+}
+
+// ---------------------------------------------------------------- 0.6.1 T44, DECISIONS 152
+// While Windows asks for admin rights, the file it will start is this setup, by path - another program running as the
+// person could rename it and put its own there. So the setup holds its own file (read, shared for reading only: no
+// rename, no delete, no write by anyone) from before the request until the admin side's first line arrives (its
+// program is loaded by then) or the start fails; then lets go - the admin side must be able to move the uninstaller
+// out of the app folder itself (park). Not closed: a swap before the setup's first instruction; only a code-signing
+// certificate answers the prompt itself.
+
+// errNotHeld: the file could not be held - the setup does not ask for admin rights
+type errNotHeld struct{ err error }
+
+func (e errNotHeld) Error() string {
+	return "Rev Radar Setup could not lock its own file before asking Windows for admin rights (" + e.err.Error() + "), so it did not ask - nothing was changed. If another program has the setup file open, close it; or copy the setup file to a folder on this PC and run it from there."
+}
+
+// startHeld: hold `path`, then start it; let go on `started` (the first line) or when start returns, never before.
+func startHeld(path string, hold func(string) (func(), error), start func(string) (uint32, error), started <-chan struct{}) (uint32, error) {
+	release, err := hold(path)
+	if err != nil {
+		logf("hold %s: %v", path, err)
+		return 0, errNotHeld{err}
+	}
+	var once sync.Once
+	free := func() { once.Do(release) }
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-started:
+			free()
+		case <-stop:
+		}
+	}()
+	code, err := start(path)
+	close(stop)
+	free()
+	return code, err
 }

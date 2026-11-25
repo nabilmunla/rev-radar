@@ -1,4 +1,4 @@
-REV RADAR 0.3.2 - what really changed between two issues: drawings, BOQs, specs
+REV RADAR 0.6.0 - what really changed between two issues: drawings, BOQs, specs
 =====================================================================================
 
 Install
@@ -106,6 +106,13 @@ Keys (? shows them all):
        Esc  off the change (whole sheet), again: all the sheets (counts and exports)
 Mouse: wheel = zoom, drag = move.
 
+Panels
+------
+  The list (left) and the details (right) are side panels. Drag a panel's edge to make it wider
+  or narrower; double-click the edge for the normal width. The width is remembered for each tab.
+  Hide or show the list with [ and the details with ], or with the tab on the panel's edge. A
+  hidden panel leaves a thin strip at the side of the window, with its tab, to bring it back.
+
 Exports (top bar)
 -----------------
   Clouded PDF   the changed and new sheets of the new issue with numbered clouds round every
@@ -116,6 +123,11 @@ Exports (top bar)
   Excel         every sheet with its status, changed text and title block text changes (issue
                 status, "not for tender" notes...); a second tab lists each change and where
                 on the sheet it is.
+
+Long jobs and Stop
+------------------
+  While a comparison or the PDF export runs, a line says what is being done and for how long,
+  with Stop. After Stop the two issues are still chosen; a stopped export saves nothing.
 
 How it decides (so you know what to trust)
 ------------------------------------------
@@ -242,6 +254,11 @@ Documents tab - specifications and other documents
   the same paragraph, level; scroll and the other follows. Details: the change word by word.
   N / P / R and the Excel register as for the BOQ.
   A scanned document (no text layer) is read by OCR (English); its paragraphs are marked "check".
+
+The divider (BOQ and Documents)
+-------------------------------
+  With old and new side by side, drag the line between them to give one issue more room.
+  Double-click the line for equal halves.
 
 Settings (gear, top right)
 --------------------------

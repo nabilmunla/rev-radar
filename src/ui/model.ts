@@ -303,8 +303,12 @@ export function plainError(e: unknown, file = 'the file'): string {
   if (/EBUSY|EPERM|EACCES|EISDIR/.test(m)) return `${file} is open in another program (close it there) or the folder is read-only`;
   if (/ENOENT/.test(m)) return "the folder isn't there any more (moved, renamed or a network drive dropped)";
   if (/ENOSPC/.test(m)) return 'the disk is full';
+  // (0.6.1 ritual: a background process that restarted or closed mid-run - the app's business, not a name to show)
+  if (/^(Engine \d+|View engine|\w+ engine) (restarted|was closed)$/i.test(m.trim())) return STOPPED_TEXT;
   return m;
 }
+/** (0.6.1) work that ended before it finished - its process restarted or closed */
+export const STOPPED_TEXT = 'The work stopped before it finished. Try again - if it stops again, a file may be damaged or too heavy for this PC.';
 
 /** where on the sheet a box is, in thirds: "top left", "middle right", "centre" */
 export function where(b: number[], page: { w: number; h: number }): string {

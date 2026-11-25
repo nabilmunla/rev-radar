@@ -712,7 +712,8 @@ function closeLooks(oldId: string, oldPg: number, newId: string, newPg: number, 
     if (!o) return 0;
     const n = pf.renderGray(newId, newPg, q.S, q.w, q.h);
     const { w, h } = q;
-    const r = Math.max(1, Math.round(s.tolMM * z * 72 / 25.4)), t = s.contrast;
+    // (r at most 31: the neighbourhood sum is exact up to there - DECISIONS 142)
+    const r = Math.min(31, Math.max(1, Math.round(s.tolMM * z * 72 / 25.4))), t = s.contrast;
     let c = 0;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x, dv = o.px[i] - n.px[i];

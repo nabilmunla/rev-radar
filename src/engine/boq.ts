@@ -10,6 +10,8 @@
 // own text, punctuation and spacing aside), then by position between items that matched, then by
 // likeness anywhere (moved).
 import type { Book, Val } from './sheets';
+import { isOff } from './flags';
+import { readNum, styleOf, type NumStyle } from './numread';
 import { hunksOf, figsOf, repKey, groupKeys, type Fig } from './figs';
 
 export interface BoqItem {
@@ -86,7 +88,7 @@ const agrees = (chain: string[], ctx: string[]) => {
 const isCaps = (t: string) => { const l = t.replace(/\([^)]*\)/g, '').replace(/[^A-Za-z]/g, ''); return l.length >= 3 && l.length <= 90 && l.replace(/[^A-Z]/g, '').length >= l.length * 0.85; };
 const COLLECT = /\b(to collection|carried (to )?(collection|summary)|total carried|brought forward|carried forward|page total|sub-?total|collection page|total for (this )?page)\b/i;
 const UNITS: Record<string, string> = { m2: 'm2', sqm: 'm2', 'sq m': 'm2', 'sq.m': 'm2', sm: 'm2', m3: 'm3', cum: 'm3', 'cu m': 'm3', 'cu.m': 'm3', nr: 'nr', no: 'nr', nos: 'nr', 'no.': 'nr', 'nos.': 'nr', number: 'nr', each: 'nr', ea: 'nr', pcs: 'nr', pc: 'nr', item: 'item', it: 'item', items: 'item', ls: 'sum', 'l.s': 'sum', 'l.s.': 'sum', 'lump sum': 'sum', sum: 'sum', ps: 'ps', 'p.s': 'ps', 'p.s.': 'ps', lm: 'm', rm: 'm', 'r.m': 'm', 'l.m': 'm', m: 'm', mt: 't', 'm.t': 't', kg: 'kg', kgs: 'kg', t: 't', tonne: 't', tonnes: 't', ton: 't', tons: 't', day: 'day', days: 'day', week: 'wk', weeks: 'wk', wk: 'wk', month: 'month', months: 'month', mth: 'month', mths: 'month', 'no/m': 'nr', set: 'set', sets: 'set', lot: 'lot', hr: 'hr', hrs: 'hr', hour: 'hr', hours: 'hr' };
-export const unitOf = (u: string) => { const k = u.toLowerCase().replace(/²/g, '2').replace(/³/g, '3').replace(/\s+/g, ' ').trim().replace(/^([a-z.]+)\s+([23])$/, '$1$2'); return UNITS[k] ?? UNITS[k.replace(/\.$/, '')] ?? k; };
+export const unitOf = (u: string) => { const k = u.toLowerCase().replace(/²/g, '2').replace(/³/g, '3').replace(/\s+/g, ' ').trim().replace(/^([a-z.]+)\s+([23])$/, '$1$2'); return UNITS[k] ?? UNITS[k.replace(/\.$/, '')] ?? UNITS[k.replace(/[.\s]/g, '')] ?? k; }; // (the third: "sq. m.", "L. S." - 0.6.1 T40)
 const KNOWN = new Set(Object.values(UNITS));
 /** a unit the list knows (m2, nr, item, sum ...) */
 export const knownUnit = (u: string) => KNOWN.has(unitOf(u));
@@ -108,12 +110,12 @@ function headerCols(cells: string[]): Cols | null {
 const PAGE_LABEL = /^(page\s*(no\.?)?\s*)?[A-Z]{1,4}\d?\s*[/-]\s*\d{1,4}$/i;
 /** a page / section code of the BOQ's own ("B19/Q+R/MEP", "B13/J/FOH/12"): page furniture, not a heading */
 const PAGE_CODE = /^[A-Z]{1,3}\d{0,3}(\s*\/\s*[A-Za-z0-9+&.\- ]{1,25}){1,4}$/;
-/** a number cell - also one typed as text ("1,447", "2 238.50") - else its text */
-const num = (v: Val | undefined): number | string | null => {
-  if (typeof v === 'number') return v;
-  const t = s(v);
-  if (/^-?\d{1,3}([, ]\d{3})+(\.\d+)?$|^-?\d*\.?\d+$/.test(t)) return Number(t.replace(/[, ]/g, ''));
-  return t || null;
+/** a number cell - also one typed as text ("1,447", "2 238.50"; "12,50" in a file that writes comma decimals - 0.6.1
+ *  T39, DECISIONS 141) - else its text */
+const num = (v: Val | undefined, style: NumStyle = 'dot'): number | string | null => {
+  const n = readNum(v, style);
+  if (n !== null) return n;
+  return s(v) || null;
 };
 
 /** the bill a file (or sheet) is: "Bill 02" from its name, else the name */
@@ -131,8 +133,15 @@ export function byBill(a: string, b: string): number {
 
 /** the items of a workbook (one file of a set; `file` names it in the results; `bill`: the bill the
  *  file is in a set of several - "" when one file is compared with one file) */
-export function readItems(book: Book, file: string, start = 0, bill?: string): BoqDoc {
+/** (0.6.1 T33) lines at a page top straight after the page before's last item - a description run on, or a heading:
+ *  the other issue decides (`joinSplits`). Kept beside the items (never sent with the BOQ): the item before them -> */
+interface Split { lines: string[]; rows: number[]; sheet: string; src: SplitSrc; done?: boolean }
+interface SplitSrc { book: Book; file: string; start: number; bill?: string; items: BoqItem[] }
+const SPLITS = new WeakMap<BoqItem, Split>();
+
+export function readItems(book: Book, file: string, start = 0, bill?: string, opts: { join?: Set<string> } = {}): BoqDoc {
   const items: BoqItem[] = [];
+  const splits: [BoqItem, Omit<Split, 'src'>][] = [];
   const notes: string[] = [];
   const sheets: BoqDoc['sheets'] = [];
   const fileBill = bill ?? billOf(file);
@@ -145,6 +154,8 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
     for (const r of rows) { cols = headerCols(r.cells); if (cols) break; }
     if (!cols) { sheets.push({ name: sh.name, items: 0, skipped: 'no item header' }); continue; }
     const C = cols;
+    // (0.6.1 T39: the sheet's own way of writing decimals, from its quantity / rate / amount cells)
+    const style = sh.numStyle ?? styleOf(rows.flatMap((r) => [C.qty, C.rate, C.amount].filter((k) => k >= 0).map((k) => r.raw[k])));
     // page furniture: the same line on many pages (client, project, "Issued on", the header)
     const seen = new Map<string, number>();
     const line = (r: (typeof rows)[0]) => r.cells.filter(Boolean).join(' | ');
@@ -155,6 +166,8 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
     // (pages: a header row again, a "To Collection" line, or a printed page label "B/12")
     let started = false, page = 1, pageLabel = '', inCollection = false, pageEnded = false;
     let section = '', group: string[] = [], afterItem = false;
+    // (T33: the page of the last item's row; the page-top lines after it, while no item has come)
+    let lastPg: number | undefined, open: { a: BoqItem; lines: string[]; rows: number[] } | null = null;
     const under = new Map<string, string[]>();
     /** the text a "(Cont'd)" heading takes back - once text follows it (items straight after it are
      *  read under the text they were under before the break) */
@@ -177,13 +190,16 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
       if (pageEnded && !COLLECT.test(t) && !lab) { page++; pageEnded = false; pageLabel = ''; }
       let unit = C.unit >= 0 ? cells[C.unit] || '' : '';
       // (and a collection's lines: "From Page No. B1/3")
-      if (COLLECT.test(t) || /^(total|sub-?total|carried|brought|from page)\b/i.test(cells.filter(Boolean).join(' '))) { pageEnded = true; continue; }
+      if (COLLECT.test(t)) { pageEnded = true; continue; }
+      // (a line beginning "Total ..." ends the page - unless it is measured: a known unit and a number quantity, "Total heat
+      //  rejection 1 No" - 0.6.1 T40, DECISIONS 146)
+      if (/^(total|sub-?total|carried|brought|from page)\b/i.test(cells.filter(Boolean).join(' ')) && !(knownUnit(unit) && C.qty >= 0 && !hiddenCols.has(C.qty) && typeof num(r.raw[C.qty], style) === 'number')) { pageEnded = true; continue; }
       // (a phrase in the unit column - a PDF's column read wrong - is not a unit)
       if (unit.split(/\s+/).length > 3 || unit.length > 16) unit = '';
       // (nor a dash - "nil" - or a page reference "Works/9")
       if (/^[-–—]+$/.test(unit) || /\/\s*\d/.test(unit)) unit = '';
       const qtyV = C.qty >= 0 ? r.raw[C.qty] : null;
-      const qty = C.qty >= 0 && !hiddenCols.has(C.qty) ? num(qtyV) : null;
+      const qty = C.qty >= 0 && !hiddenCols.has(C.qty) ? num(qtyV, style) : null;
       // (and the columns between the item's number and its description - "Sign Type: ID-BH03" - are
       //  part of what it is)
       let desc = (C.item >= 0 && C.desc - C.item > 1 ? [...cells.slice(C.item + 1, C.desc), cells[C.desc]] : [cells[C.desc]]).filter(Boolean).join(' ');
@@ -193,7 +209,7 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
       if (ref === '0') ref = '';
       //  (once: client, project and bill names set there are on every page)
       if (ref && !/\d/.test(ref) && ref.replace(/[^A-Za-z]/g, '').length > 3 && (inItemCol.get(ref) || 0) < 2) { desc = [ref, desc].filter(Boolean).join(' '); ref = ''; }
-      const amountV = C.amount >= 0 ? num(r.raw[C.amount]) : null, rateV = C.rate >= 0 ? num(r.raw[C.rate]) : null;
+      const amountV = C.amount >= 0 ? num(r.raw[C.amount], style) : null, rateV = C.rate >= 0 ? num(r.raw[C.rate], style) : null;
       // (an item priced by its amount only - a provisional sum: "A | Allow the sum of ... | | | 50,000")
       const priced = (typeof amountV === 'number' && amountV !== 0) || (typeof rateV === 'number' && rateV !== 0);
       const isItem = !!unit || (!!ref && desc !== '' && (qty !== null || priced));
@@ -205,6 +221,17 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
         if (/^(collection|summary|page summary)$/i.test(desc.replace(CONTD, '').replace(/[^a-z ]/gi, '').trim())) { inCollection = true; continue; }
         if (inCollection) continue;
         if (!desc) continue;
+        // (T33: joined - the lines are the end of the item before; the reader's state as if the page had not broken)
+        if (opts.join?.has(sh.name + '#' + r.r) && items.length) { const it = items[items.length - 1]; it.text = it.text + ' ' + desc; continue; }
+        if (!opts.join) {
+          if (r.pg !== undefined && lastPg !== undefined && r.pg === lastPg + 1 && !ref && !pending && (afterItem || open) && items.length) {
+            // (a "(Cont'd)" line before or after them: read as always, not one of them; a heading in capitals: not a run-on line)
+            if (!CONTD.test(desc)) {
+              if (isCaps(desc)) open = null;
+              else { open ??= { a: items[items.length - 1], lines: [], rows: [] }; open.lines.push(desc); open.rows.push(r.r); }
+            }
+          } else open = null;
+        }
         if (ref) {
           // (an item whose number is on its first line and its quantity on its last)
           if (pending) group.push(...pending.text);
@@ -282,10 +309,12 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
       items.push({
         i: start + items.length, file, bill: sheetBill, sheet: sh.name, row: row + 1, ...(row !== r.r ? { last: r.r + 1 } : {}), page: r.pg !== undefined ? 'p.' + (r.pg + 1) : pageLabel || 'p.' + page,
         ref: ref.replace(/\*/g, '').trim(), mark, section, group: group.join(' '), text, basis, ...(r.ocr ? { ocr: true } : {}),
-        unit, qty, rate: C.rate >= 0 ? num(r.raw[C.rate]) : null, amount: C.amount >= 0 ? num(r.raw[C.amount]) : null,
+        unit, qty, rate: C.rate >= 0 ? num(r.raw[C.rate], style) : null, amount: C.amount >= 0 ? num(r.raw[C.amount], style) : null,
       });
       count++;
       afterItem = true;
+      if (open) { splits.push([open.a, { lines: open.lines, rows: open.rows, sheet: sh.name }]); open = null; }
+      lastPg = r.pg;
     }
     if (pending) notes.push(`${sh.name}: item ${pending.ref} at row ${pending.row + 1} has no quantity or unit - left out`);
     if (hiddenItems) notes.push(`${sh.name}: ${hiddenItems} hidden row${hiddenItems === 1 ? '' : 's'} left out (hidden in Excel)`);
@@ -302,12 +331,77 @@ export function readItems(book: Book, file: string, start = 0, bill?: string): B
     if (vis.some((r) => r.bx)) grid.bx = vis.map((r) => (r.bx ? [...r.bx.slice(0, 4), ...used.flatMap((k) => [r.bx![4 + 2 * k] ?? NaN, r.bx![5 + 2 * k] ?? NaN])] : null));
     sheets.push({ name: sh.name, items: count, file, sheet: sh.name, grid });
   }
+  if (splits.length) { const src: SplitSrc = { book, file, start, bill, items }; for (const [a, x] of splits) SPLITS.set(a, { ...x, src }); }
   return { items, notes, sheets };
+}
+
+/** (0.6.1 T33, DECISIONS 127, 133-135) join a description run on to the next page - on the other issue's evidence
+ *  only, by equality after `fold`: (1) the lines hold a letter; (2) the other issue (same bill) has no heading equal
+ *  to them or holding them; (3) the other issue holds the joined text whole more often than this one already does
+ *  (one join a spare, in reading order), or a split of its own that joins to the same text from another first part.
+ *  The joined item's text, and the headings the items after it are read under, are what one reading of the file with
+ *  the lines joined gives. Returns the joins made (both issues). */
+export function joinSplits(O: BoqDoc, N: BoqDoc): number {
+  const cands = (D: BoqDoc) => D.items.flatMap((a) => { const x = SPLITS.get(a); return x && !x.done ? [{ a, x, key: norm(a.bill) + '|' + fold(a.text + ' ' + x.lines.join(' ')) }] : []; });
+  const cO = cands(O), cN = cands(N);
+  if (!cO.length && !cN.length) return 0;
+  // (an item's text folds to a joined text only if its letters are the joined text's letters - fold keeps every
+  //  letter: only those items are folded and counted, the rest never can be equal)
+  const letters = (t: string) => t.toLowerCase().replace(/[^a-z]/g, '');
+  const sigs = new Set([...cO, ...cN].map((c) => letters(c.a.text + ' ' + c.x.lines.join(' '))));
+  const counts = (D: BoqDoc) => { const m = new Map<string, number>(); for (const it of D.items) { if (!sigs.has(letters(it.text))) continue; const k = norm(it.bill) + '|' + fold(it.text); m.set(k, (m.get(k) ?? 0) + 1); } return m; };
+  // (the other issue's candidates by joined text - only those whose joined text this issue has a candidate for)
+  const keysO = new Set(cO.map((c) => c.key)), keysN = new Set(cN.map((c) => c.key));
+  const byJoin = (cs: typeof cO, want: Set<string>) => { const m = new Map<string, { c: (typeof cO)[number]; first: string; lines: string }[]>(); for (const c of cs) if (want.has(c.key)) (m.get(c.key) ?? m.set(c.key, []).get(c.key)!).push({ c, first: fold(c.a.text), lines: fold(c.x.lines.join(' ')) }); return m; };
+  const kO = counts(O), kN = counts(N), jO = byJoin(cO, keysN), jN = byJoin(cN, keysO);
+  // (the other issue's headings, all of them - the one exception, a heading holding the lines of a candidate there
+  //  with the same joined text, is made in clean(): DECISIONS 137)
+  const heads = (D: BoqDoc) => {
+    const m = new Map<string, Set<string>>();
+    for (const it of D.items) { const b = norm(it.bill), g = fold(it.group); const set = m.get(b) ?? m.set(b, new Set()).get(b)!; set.add(' ' + g + ' '); set.add(' ' + fold(it.section) + ' '); }
+    return m;
+  };
+  let hO: ReturnType<typeof heads> | null = null, hN: ReturnType<typeof heads> | null = null;
+  type J = ReturnType<typeof byJoin>;
+  const memo = new Map<unknown, boolean>();
+  // ((1) letters and (2) no heading of the other issue holding the lines - except one holding the lines of a candidate
+  //  there with the same joined text: that text is the thing in question. A backing split must be clean itself.)
+  const clean = (c: (typeof cO)[number], theirJoins: J, theirHeads: () => Map<string, Set<string>>): boolean => {
+    const was = memo.get(c); if (was !== undefined) return was;
+    const lines = fold(c.x.lines.join(' '));
+    let ok = /[a-z]/.test(lines);
+    if (ok) { const same = theirJoins.get(c.key) ?? []; const hs = theirHeads().get(norm(c.a.bill)); if (hs && [...hs].some((h) => h.includes(' ' + lines + ' ') && !same.some((t) => h.includes(' ' + t.lines + ' ')))) ok = false; }
+    memo.set(c, ok); return ok;
+  };
+  const pick = (cs: typeof cO, mine: Map<string, number>, theirs: Map<string, number>, theirJoins: J, theirHeads: () => Map<string, Set<string>>, myJoins: J, myHeads: () => Map<string, Set<string>>) => {
+    const used = new Map<string, number>();
+    return cs.filter((c) => {
+      const spare = (theirs.get(c.key) ?? 0) - (mine.get(c.key) ?? 0) - (used.get(c.key) ?? 0);
+      const first = fold(c.a.text);
+      const split = spare > 0 ? true : (theirJoins.get(c.key) ?? []).some((t) => t.first !== first && clean(t.c, myJoins, myHeads));
+      if (!split) return false;
+      if (!clean(c, theirJoins, theirHeads)) return false;
+      if (spare > 0) used.set(c.key, (used.get(c.key) ?? 0) + 1);
+      return true;
+    });
+  };
+  const HN = () => (hN ??= heads(N)), HO = () => (hO ??= heads(O));
+  const pO = pick(cO, kO, kN, jN, HN, jO, HO), pN = pick(cN, kN, kO, jO, HO, jN, HN);
+  // (one reading of each file with its joined lines, the items' text and headings taken from it)
+  const bySrc = new Map<SplitSrc, Set<string>>();
+  for (const c of [...pO, ...pN]) { const set = bySrc.get(c.x.src) ?? bySrc.set(c.x.src, new Set()).get(c.x.src)!; for (const r of c.x.rows) set.add(c.x.sheet + '#' + r); c.x.done = true; }
+  let n = 0;
+  for (const [src, join] of bySrc) {
+    const alt = readItems(src.book, src.file, src.start, src.bill, { join }).items;
+    if (alt.length !== src.items.length || alt.some((x, k) => x.ref !== src.items[k].ref || x.row !== src.items[k].row)) continue;
+    src.items.forEach((it, k) => { const x = alt[k]; if (it.text !== x.text) n++; it.text = x.text; it.group = x.group; it.section = x.section; if (x.basis !== undefined || it.basis !== undefined) it.basis = x.basis; });
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------- pairing
 
-export interface Tok { words: Map<string, number>; nums: string[]; n: number }
+export interface Tok { words: Map<string, number>; nums: string[]; n: number; /** (0.6.1 T40) `nums` joined, kept */ nk?: string }
 export function tok(t: string): Tok {
   const words = new Map<string, number>();
   const nums: string[] = [];
@@ -329,7 +423,7 @@ export function likeness(a: Tok, b: Tok): number {
   let common = 0;
   for (const [w, k] of a.words) common += Math.min(k, b.words.get(w) || 0);
   let d = (2 * common) / (a.n + b.n);
-  if (a.nums.join(' ') !== b.nums.join(' ')) d *= a.nums.length && b.nums.length ? 0.75 : 0.85;
+  if ((a.nk ??= a.nums.join(' ')) !== (b.nk ??= b.nums.join(' '))) d *= a.nums.length && b.nums.length ? 0.75 : 0.85;
   return d;
 }
 
@@ -348,6 +442,8 @@ export interface BoqPair {
 }
 export interface BoqResult {
   old: BoqDoc; neu: BoqDoc;
+  /** (0.6.1 T33) descriptions joined over a page break, both issues (none: absent) */
+  splitJoins?: number;
   pairs: BoqPair[];
   removed: number[]; added: number[];
   /** a new issue of changed pages only: old items outside the pages it covers (not "removed") */
@@ -369,6 +465,8 @@ const sameVal = (a: number | string | null, b: number | string | null) => {
 
 /** the items of two issues paired */
 export function compareBoq(old: BoqDoc, neu: BoqDoc, opts: { partial?: boolean } = {}): BoqResult {
+  // (0.6.1 T33: a description run on to the next page joined first, on the other issue's evidence)
+  const splitJoins = isOff('boqsplit') ? 0 : joinSplits(old, neu);
   const O = old.items, N = neu.items;
   // (a bill of the new issue whose number the old one has not - "Bill-01 (B+GF+P)" re-issued for
   //  "Bill-2 (B+GF+P)" - is read as the old bill without a namesake it shares most items with; a
@@ -406,7 +504,8 @@ export function compareBoq(old: BoqDoc, neu: BoqDoc, opts: { partial?: boolean }
   const codes = (x: BoqItem) => new Set([...(own(x).match(CODE) ?? []), ...[...own(x).matchAll(REF)].map((m) => m[1].toUpperCase().replace(/[.,;:)]+$/, ''))].filter((c) => !/^IP-?\d+$/.test(c)));
   const cO = O.map(codes), cN = N.map(codes);
   const codeBonus = (o: number, n: number) => (!cO[o].size || !cN[n].size ? 0 : [...cO[o]].some((c) => cN[n].has(c)) ? 0.15 : -0.1);
-  const placeLike = (o: number, n: number) => Math.max(like(o, n), oO[o].n >= 2 ? 0.9 * likeness(oO[o], oN[n]) : 0) + qtyBonus(o, n) + codeBonus(o, n);
+  // (its own words' likeness weighed once - 0.6.1 T40: the same sum as like(o, n), half the work)
+  const placeLike = (o: number, n: number) => { const L = likeness(oO[o], oN[n]); return Math.max(0.7 * L + 0.3 * likeness(gO[o], gN[n]), oO[o].n >= 2 ? 0.9 * L : 0) + qtyBonus(o, n) + codeBonus(o, n); };
   const fO = O.map((x) => norm(full(x))), fN = N.map((x) => norm(full(x)));
   const oTo = new Int32Array(O.length).fill(-1), nTo = new Int32Array(N.length).fill(-1);
   const how: ('same' | 'place' | 'like')[] = [];
@@ -443,6 +542,57 @@ export function compareBoq(old: BoqDoc, neu: BoqDoc, opts: { partial?: boolean }
   //  them too - forty wardrobes "560 x 625" changed from No. to m in their own unit types)
   const says = (t: { n: number }) => t.n >= 4;
   exact((o) => (says(tO[o]) ? bs(O[o], bO(O[o])) + '|' + fO[o] : '\u0001' + o), (n) => (says(tN[n]) ? bs(N[n], bN(N[n])) + '|' + fN[n] : '\u0002' + n), true);
+  // (0.6.1 T40, DECISIONS 145: a big rewritten gap - the new items an old one could reach 0.65 with, by a bound on placeLike
+  //  from what they share: own words (L <= 2c / (a + b)), the same quantity and unit, a code; headings at most 0.3 x 1.
+  //  Exact: no pair the full weighing makes is left out (quantities by sameQty itself, float noise included). Built on first use only)
+  const gapNear = (ns: number[]) => {
+    let post: Map<string, number[]> | null = null;
+    let cnt: Float64Array, qb: Float64Array, cb: Uint8Array, seen: Uint8Array;
+    // (per unit: the new items' number quantities in order - [quantity, j]; 0 and 1 kept, sameQty leaves out the OLD side's only - E3, DECISIONS 160)
+    let byUnit: Map<string, [number, number][]> | null = null;
+    return (o: number): number[] => {
+      if (!post) {
+        post = new Map();
+        // (postings flat: item, count, item, count ...)
+        const add = (k: string, j: number, m: number) => { const l = post!.get(k); if (l) l.push(j, m); else post!.set(k, [j, m]); };
+        ns.forEach((n, j) => { for (const [w, m] of oN[n].words) add(w, j, m); for (const c of cN[n]) add('\u0001' + c, j, 1); if (!oN[n].n) add('\u0003', j, 1); });
+        byUnit = new Map();
+        ns.forEach((n, j) => { const v = N[n].qty; if (typeof v !== 'number') return; const u = unitOf(N[n].unit); const l = byUnit!.get(u); if (l) l.push([v, j]); else byUnit!.set(u, [[v, j]]); });
+        for (const l of byUnit.values()) l.sort((x, y) => x[0] - y[0]);
+        cnt = new Float64Array(ns.length); qb = new Float64Array(ns.length); cb = new Uint8Array(ns.length); seen = new Uint8Array(ns.length);
+      }
+      const touched: number[] = [];
+      const touch = (j: number) => { if (!seen[j]) { seen[j] = 1; touched.push(j); } };
+      for (const [w, m] of oO[o].words) { const l = post.get(w); if (l) for (let x = 0; x < l.length; x += 2) { const j = l[x]; touch(j); cnt[j] += Math.min(m, l[x + 1]); } }
+      const qv = O[o].qty;
+      if (typeof qv === 'number' && qv !== 0 && qv !== 1) {
+        const l = byUnit!.get(unitOf(O[o].unit));
+        if (l) {
+          // (wider than sameVal's 1e-9 x max(1, |a|, |b|), then sameQty decides - so no pair with the bonus is missed)
+          const d = 4e-9 * Math.max(1, Math.abs(qv));
+          let lo = 0, hi = l.length;
+          while (lo < hi) { const m = (lo + hi) >> 1; if (l[m][0] < qv - d) lo = m + 1; else hi = m; }
+          for (let x = lo; x < l.length && l[x][0] <= qv + d; x++) { const jj = l[x][1]; if (sameQty(o, ns[jj])) { touch(jj); qb[jj] = qtyBonus(o, ns[jj]); } }
+        }
+      }
+      for (const c of cO[o]) { const l = post.get('\u0001' + c); if (l) for (let x = 0; x < l.length; x += 2) { touch(l[x]); cb[l[x]] = 1; } }
+      const a = oO[o].n;
+      const le = !a ? post.get('\u0003') : undefined;
+      if (le) for (let x = 0; x < le.length; x += 2) touch(le[x]);
+      const out: number[] = [];
+      for (const j of touched) {
+        // (L as likeness has it: shared words, a number that differs counting heavily)
+        const tn = oN[ns[j]], to = oO[o], b = tn.n;
+        let L = !a && !b ? 1 : a + b ? (2 * cnt[j]) / (a + b) : 0;
+        if ((a || b) && (to.nk ??= to.nums.join(' ')) !== (tn.nk ??= tn.nums.join(' '))) L *= to.nums.length && tn.nums.length ? 0.75 : 0.85;
+        const bound = Math.max(0.7 * L + 0.3, a >= 2 ? 0.9 * L : 0) + qb[j] + (cb[j] ? 0.15 : 0) + 0.05;
+        // (0.65: alignGap's min 0.55 + 0.1 - kept in step with the call below)
+        if (bound >= 0.65 - 1e-9) out.push(j);
+        cnt[j] = 0; qb[j] = 0; cb[j] = 0; seen[j] = 0;
+      }
+      return out.sort((x, y) => x - y).map((j) => ns[j]);
+    };
+  };
   // 2. between items that stayed in order, the rest paired by place and likeness (an item edited
   //    where it is: its description, quantity, unit)
   const anchors = inOrder(O.map((_, o) => o).filter((o) => oTo[o] >= 0), (o) => oTo[o]);
@@ -452,7 +602,7 @@ export function compareBoq(old: BoqDoc, neu: BoqDoc, opts: { partial?: boolean }
     for (let o = bounds[k][0] + 1; o < bounds[k + 1][0]; o++) if (oTo[o] < 0) os.push(o);
     for (let n = bounds[k][1] + 1; n < bounds[k + 1][1]; n++) if (nTo[n] < 0) ns.push(n);
     if (!os.length || !ns.length) continue;
-    alignGap(os, ns, (o, n) => placeLike(o, n) + (unitOf(O[o].unit) === unitOf(N[n].unit) ? 0.05 : 0), 0.55, (o, n) => pair(o, n, 'place'));
+    alignGap(os, ns, (o, n) => placeLike(o, n) + (unitOf(O[o].unit) === unitOf(N[n].unit) ? 0.05 : 0), 0.55, (o, n) => pair(o, n, 'place'), gapNear(ns));
   }
   // 3. the rest: alike enough anywhere (moved, perhaps changed too) - an item's own line the same and
   //    found once on each side (moved under another heading), or its whole description alike
@@ -532,7 +682,7 @@ export function compareBoq(old: BoqDoc, neu: BoqDoc, opts: { partial?: boolean }
     outside = removed.filter((o) => !covered(o));
     removed = removed.filter((o) => covered(o));
   }
-  return { old, neu, pairs, removed, added: N.map((_, n) => n).filter((n) => nTo[n] < 0), outside };
+  return { old, neu, pairs, removed, added: N.map((_, n) => n).filter((n) => nTo[n] < 0), outside, ...(splitJoins ? { splitJoins } : {}) };
 }
 
 /** the longest run of `xs` (in their order) whose `to` also rises: the ones that kept their order */
@@ -565,11 +715,15 @@ function alignRuns(os: number[], ns: number[], put: (o: number, n: number) => vo
 }
 
 /** a gap between items kept in order: paired in order, by likeness (best total, each at least `min`) */
-export function alignGap(os: number[], ns: number[], like: (o: number, n: number) => number, min: number, put: (o: number, n: number) => void) {
+export function alignGap(os: number[], ns: number[], like: (o: number, n: number) => number, min: number, put: (o: number, n: number) => void, near?: (o: number) => Iterable<number>) {
   if (os.length * ns.length > 250_000) {
     // (a big rewrite: best pairs first)
     const c: [number, number, number][] = [];
-    for (const o of os) for (const n of ns) { const v = like(o, n); if (v >= min + 0.1) c.push([v, o, n]); }
+    if (near && !isOff('gapindex')) {
+      // (0.6.1 T40, DECISIONS 145: not every pair weighed - 5,000 x 5,000 took 40 s - only those `near` names: the pairs
+      //  that could reach `min` + 0.1, in `ns` order, so the pairs are the full weighing's)
+      for (const o of os) for (const n of near(o)) { const v = like(o, n); if (v >= min + 0.1) c.push([v, o, n]); }
+    } else for (const o of os) for (const n of ns) { const v = like(o, n); if (v >= min + 0.1) c.push([v, o, n]); }
     c.sort((a, b) => b[0] - a[0]);
     const uo = new Set<number>(), un = new Set<number>();
     for (const [, o, n] of c) if (!uo.has(o) && !un.has(n)) { uo.add(o); un.add(n); put(o, n); }

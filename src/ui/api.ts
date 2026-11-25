@@ -36,7 +36,9 @@ export interface RR {
   showInFolder(p: string): Promise<boolean>;
   tempPath(name: string): Promise<string>;
   /** a Word file as a PDF in the temp folder (Word on Windows, else LibreOffice); `why` when it could not be (`none`: no converter at all) */
-  docxConvert(p: string): Promise<{ ok: true; pdf: string; by: string; cached?: boolean; earlier?: boolean } | { ok: false; why: string; none?: boolean }>;
+  docxConvert(p: string): Promise<{ ok: true; pdf: string; by: string; cached?: boolean; earlier?: boolean } | { ok: false; why: string; none?: boolean; cancelled?: boolean }>;
+  /** Stop (0.6.1 T34): the conversion running now is ended - its PowerShell / LibreOffice and its Word - and answers `cancelled` */
+  docxCancel(): Promise<boolean>;
   cacheGet(k: string): Promise<{ json: any; thumb: Uint8Array } | null>;
   cachePreview(k: string): Promise<Uint8Array | null>;
   cachePut(k: string, json: unknown, thumb: Uint8Array, preview: Uint8Array): Promise<boolean>;

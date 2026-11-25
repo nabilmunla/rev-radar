@@ -9,11 +9,14 @@ let saved: Uint8Array | null = null;
 type Conv = { ok: true; pdf: string; by: string; cached?: boolean } | { ok: false; why: string; none?: boolean; off?: boolean };
 let convert: ((p: string) => Promise<Conv>) | undefined;
 const asked: string[] = [];
+let cancels = 0;
 (globalThis as unknown as { window: unknown }).window = {
   addEventListener() {}, removeEventListener() {},
   rr: {
     saveDialog: async () => 'x.xlsx', write: async (_p: string, b: Uint8Array) => { saved = b; }, showInFolder: async () => {}, settings: async () => ({}), setSettings: async () => {},
     docxConvert: async (p: string) => { asked.push(p); return convert ? convert(p) : { ok: false, why: 'no converter' }; },
+    // (0.6.1 T34: Stop ends the conversion running in the main process)
+    docxCancel: async () => { cancels++; },
     // (0.6.0 T23: a Documents compare runs on an engine of its own, started and ended per run)
     engineAdd: async () => {}, engineStop: async () => {},
   },
@@ -108,4 +111,49 @@ test('T30: a Word file converted in an earlier session - "converted earlier by W
   const s = await run(['a.docx'], ['b.docx']);
   assert.equal(s.phase, 'done', s.error);
   assert.equal(s.wordNote, 'Word files shown as pages (converted earlier by Word)');
+});
+
+// 0.6.1 T34 (DECISIONS 129): Stop during the conversion also ends the converter's run - and a cancelled answer says nothing
+test('T34: Stop while the Word files are being turned into PDFs asks the converter to cancel; its "cancelled" answer adds no line and no result', async () => {
+  let answer: (v: Conv) => void = () => { /* */ };
+  convert = () => new Promise<Conv>((res) => { answer = res; });
+  cancels = 0;
+  const p = run(['a.docx'], ['b.docx']);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ui.docs?.phase, 'running');
+  assert.match(ui.docs!.note || '', /Turning the Word files into PDFs/);
+  D.stopDocs();
+  assert.equal(cancels, 1, 'the converter was asked to cancel, once');
+  assert.equal(ui.docs, null, 'the start screen is back');
+  answer({ ok: false, cancelled: true } as never);
+  await p;
+  assert.equal(ui.docs, null, 'a cancelled answer shows nothing');
+  assert.deepEqual(asked, ['/in/a.docx'], 'the second file was never asked');
+  assert.equal(given.length, 0, 'no compare was started');
+  // (Stop with nothing running does not ask)
+  cancels = 0; D.stopDocs();
+  assert.equal(cancels, 0);
+});
+
+test('T34: a cancelled answer that arrives while the run is still live adds no "shown as text" line', async () => {
+  convert = async () => ({ ok: false, cancelled: true } as never);
+  const s = await run(['a.docx'], ['b.docx']);
+  assert.ok(!/shown as text/.test(s.wordNote || ''), s.wordNote);
+  assert.deepEqual(asked, ['/in/a.docx'], 'the rest are not asked');
+});
+
+// 0.6.1 ritual (sweep 1): leaving the Documents tab (Home) while converting ends the conversion too - the next compare
+// must not wait behind it
+test('ritual 0.6.1: leaving Documents while the Word files are being turned into PDFs asks the converter to cancel', async () => {
+  let answer: (v: Conv) => void = () => { /* */ };
+  convert = () => new Promise<Conv>((res) => { answer = res; });
+  cancels = 0;
+  const p = run(['a.docx'], ['b.docx']);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ui.docs?.phase, 'running');
+  D.leaveDocs();
+  assert.equal(cancels, 1, 'the converter was asked to cancel');
+  answer({ ok: false, cancelled: true } as never);
+  await p;
+  assert.equal(ui.docs, null);
 });

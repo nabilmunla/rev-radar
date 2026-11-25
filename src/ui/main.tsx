@@ -4,7 +4,7 @@ import './base.css';
 import './styles.css';
 import { App } from './App';
 import { rr } from './api';
-import { ui, bump, realAreas, stepAreas, tinyFrom, textGroups, hasFigures, isFigText, needsReview } from './model';
+import { ui, bump, realAreas, stepAreas, tinyFrom, textGroups, groupOfArea, hasFigures, isFigText, needsReview } from './model';
 import { readSet, sideLabels, startSession } from './runner';
 import { startBoq, exportBoqExcel, leaveBoq, visible, boqGroups, isFigure, itemCount } from './boqrun';
 import { startDocs, exportDocsExcel, leaveDocs, docVisible, docGroups } from './docsrun';
@@ -69,6 +69,10 @@ createRoot(document.getElementById('root')!).render(<Guard><App /></Guard>);
   boxes(key: string) { const p = ui.session?.pairs.find((x) => x.key === key); return p?.result?.areas.map((a) => a.box) ?? []; },
   /** the counted areas of a sheet with their text changes (T8 tests) */
   texts(key: string) { const p = ui.session?.pairs.find((x) => x.key === key); return p?.result ? realAreas(p).map((i) => p.result!.areas[i].text.map((t) => [t.kind, t.from, t.to])) : []; },
+  /** (T43 tests) a sheet's counted areas: the ones in a same-change group (a note on 3+ sheets) and the others */
+  groupAreas(key: string) { const p = ui.session?.pairs.find((x) => x.key === key); if (!p?.result) return null; const gs = textGroups(ui.session!.pairs); const r = realAreas(p); return { inGroup: r.filter((i) => groupOfArea(gs, p, i)), other: r.filter((i) => !groupOfArea(gs, p, i)) }; },
+  /** (T43 tests) a sheet open with one of its changes shown */
+  selectArea(key: string, area: number) { const p = ui.session?.pairs.find((x) => x.key === key); if (p) { ui.selected = p.id; ui.area = area; bump(); } return !!p; },
   select(key: string) { const p = ui.session?.pairs.find((x) => x.key === key); if (p) { ui.selected = p.id; ui.area = -1; bump(); } return !!p; },
   /** back to a tab's start screen (its comparison closed) */
   leave(tab: 'boq' | 'docs') { if (tab === 'boq') leaveBoq(); else leaveDocs(); },

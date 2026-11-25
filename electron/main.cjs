@@ -364,6 +364,7 @@ ipcMain.handle('file:write', async (_e, p, data) => {
 ipcMain.handle('shell:open', (_e, p) => (exported.test(String(p)) ? shell.openPath(String(p)) : 'not an exported file'));
 ipcMain.handle('shell:show', (_e, p) => { if (exported.test(String(p))) shell.showItemInFolder(String(p)); return true; });
 ipcMain.handle('docx:convert', (_e, p) => docxConv.convert(String(p || '')));
+ipcMain.handle('docx:cancel', () => { docxConv.cancel(); return true; }); // (Stop in the Documents tab, 0.6.1 T34)
 ipcMain.handle('paths:temp', async (_e, name) => {
   const d = path.join(os.tmpdir(), APP);
   await fsp.mkdir(d, { recursive: true });

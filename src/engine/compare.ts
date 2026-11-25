@@ -421,12 +421,13 @@ export interface DiffOptions {
  */
 const LOSS = 0.5;
 
-/** darkest pixel and ink sum within r of (x, y), packed as darkest * 65536 + sum */
+/** darkest pixel and ink sum within r of (x, y), packed as darkest * 2^20 + sum - exact up to r = 31 (63 x 63 x 255 =
+ *  1,012,095; 0.6.1 T37, DeepSeek 1: 16 bits spilled the sum of solid ink past r = 7 into the darkest pixel) */
 function nb(g: Uint8Array, x: number, y: number, w: number, h: number, R: number): number {
   let mn = 255, sum = 0;
   const ya = y - R < 0 ? 0 : y - R, yb = y + R >= h ? h - 1 : y + R, xa = x - R < 0 ? 0 : x - R, xb = x + R >= w ? w - 1 : x + R;
   for (let yy = ya; yy <= yb; yy++) { const row = yy * w; for (let xx = xa; xx <= xb; xx++) { const v = g[row + xx]; if (v < mn) mn = v; sum += 255 - v; } }
-  return mn * 65536 + sum;
+  return mn * 1048576 + sum;
 }
 
 /**
@@ -439,7 +440,7 @@ function nb(g: Uint8Array, x: number, y: number, w: number, h: number, R: number
 export function pixelChange(op: Uint8Array, np: Uint8Array, i: number, x: number, y: number, w: number, h: number, R: number, T: number): number {
   const ov = op[i], nv = np[i];
   const nN = nb(np, x, y, w, h, R), nO = nb(op, x, y, w, h, R);
-  const nMin = nN >>> 16, nSum = nN & 0xffff, oMin = nO >>> 16, oSum = nO & 0xffff;
+  const nMin = nN >>> 20, nSum = nN & 0xfffff, oMin = nO >>> 20, oSum = nO & 0xfffff;
   let c = 0;
   if ((nMin - ov > T || lineGone(op, np, i, x, y, w, h, R, T) || longLineGone(op, np, i, x, y, w, h, R, T)) && oSum - nSum > (255 - ov) * LOSS) c |= 1;
   if ((oMin - nv > T || lineGone(np, op, i, x, y, w, h, R, T) || longLineGone(np, op, i, x, y, w, h, R, T)) && nSum - oSum > (255 - nv) * LOSS) c |= 2;
@@ -644,8 +645,10 @@ export function overlay(o: Gray, n: Gray, r: number, t: number, pal: Palette = d
   for (let i = 0, j = 0; i < w * h; i++, j += 4) {
     const ov = op[i], nv = np[i];
     const x = i % w, y = (i / w) | 0;
-    const removed = ov !== nv && (nMin[i] - ov > t || lineGone(op, np, i, x, y, w, h, r, t)) && oSum[i] - nSum[i] > (255 - ov) * LOSS;
-    const added = ov !== nv && (oMin[i] - nv > t || lineGone(np, op, i, x, y, w, h, r, t)) && nSum[i] - oSum[i] > (255 - nv) * LOSS;
+    // (the same three tests as pixelChange - the long line too (0.6.1 T37, DeepSeek 3); the ink test first, so the line
+    //  tests run only where it holds)
+    const removed = ov !== nv && oSum[i] - nSum[i] > (255 - ov) * LOSS && (nMin[i] - ov > t || lineGone(op, np, i, x, y, w, h, r, t) || longLineGone(op, np, i, x, y, w, h, r, t));
+    const added = ov !== nv && nSum[i] - oSum[i] > (255 - nv) * LOSS && (oMin[i] - nv > t || lineGone(np, op, i, x, y, w, h, r, t) || longLineGone(np, op, i, x, y, w, h, r, t));
     let R = 255, G = 255, B = 255;
     if (removed || added) {
       // the changed mark at full strength; where both changed (moved in place), purple-ish mix

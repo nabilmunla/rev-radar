@@ -153,3 +153,33 @@ test('after the setup ran, what it installed runs: the old choice and newer down
   assert.equal(V.setupRan(store, inst, '0.3.0'), '', 'the same install is not new again');
   assert.equal(V.choose(b, store, RT).version, '0.3.2');
 });
+
+test('a copy offered twice in one start is not taken: a store that cannot be written ends on the installed copy (bug 26)', () => {
+  const root = tmp(), store = path.join(root, 'store');
+  const b = builtin(root, '0.3.0');
+  const d = V.installPackage(zipOf(root, '0.3.1'), store, '0.3.1', RT, 'x');
+  fs.writeFileSync(path.join(d, 'starts.json'), JSON.stringify({ n: 2, at: 1 }));
+  const log: string[] = [];
+  // 1. the function itself, the write failure stubbed: choose() keeps returning the same folder
+  let calls = 0;
+  const r = V.pickStart(() => { if (++calls > 50) throw new Error('spins'); return V.choose(b, store, RT); }, () => false, (l: string) => log.push(l));
+  assert.equal(r.pick, null, 'the installed copy runs');
+  assert.equal(log.filter((l) => l.startsWith('set aside')).length, 1, 'one log line');
+  assert.ok(calls <= 3, 'ended: ' + calls);
+  // 2. the real functions on a store that cannot be written: bad.json's temp file cannot be created
+  //    (a directory sits in its place - works for root too, where chmod 0o555 would not stop the write)
+  fs.mkdirSync(path.join(d, `bad.json.${process.pid}.tmp`));
+  const log2: string[] = [];
+  let n = 0;
+  const r2 = V.pickStart(() => { if (++n > 50) throw new Error('spins'); return V.choose(b, store, RT); }, V.beginStart, (l: string) => log2.push(l));
+  assert.equal(r2.pick, null);
+  assert.equal(log2.filter((l) => l.startsWith('set aside')).length, 1);
+  assert.ok(!fs.existsSync(path.join(d, 'bad.json')), 'it really could not be written');
+  fs.rmSync(path.join(d, `bad.json.${process.pid}.tmp`), { recursive: true });
+  // 3. a copy that can be counted still runs, with what starts.json held
+  const d2 = V.installPackage(zipOf(root, '0.3.2'), store, '0.3.2', RT, 'x');
+  const ok = V.pickStart(() => V.choose(b, store, RT), V.beginStart, () => {});
+  assert.equal(ok.pick.version, '0.3.2');
+  assert.equal(ok.before, null);
+  assert.deepEqual(V.readJson(path.join(d2, 'starts.json')).n, 1);
+});

@@ -47,3 +47,16 @@ test('a stale record that cannot be removed does not spin the engine: read as it
   } finally { (fs as { rmSync: typeof fs.rmSync }).rmSync = rm; }
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+// 0.6.1 T38 (DeepSeek 2, DECISIONS 143): only a page zlib refuses for what is in it is written down as "left as it is";
+// any other failure is not written down (merged next time)
+test('T38 (bug 2): which failed merges are written down', async () => {
+  const { mergeFailure } = await import('../src/engine/heavy');
+  const z = (code: string, msg: string) => Object.assign(new Error(msg), { code });
+  assert.equal(mergeFailure(z('Z_DATA_ERROR', 'incorrect header check')), false, 'a corrupt Flate stream: left as it is');
+  assert.equal(mergeFailure(z('Z_DATA_ERROR', 'invalid stored block lengths')), false);
+  assert.equal(mergeFailure(z('Z_STREAM_ERROR', 'stream error')), false);
+  assert.equal(mergeFailure(new Error('invalid distance too far back')), false, 'zlib text without a code');
+  for (const e of [new Error('addRawStream returned null'), new Error('Cannot read properties of null (reading \'put\')'), new Error('read error: short read'), z('Z_MEM_ERROR', 'out of memory'), z('Z_BUF_ERROR', 'unexpected end of file'), new Error('EBUSY: resource busy')])
+    assert.equal(mergeFailure(e), 'failed', e.message);
+});

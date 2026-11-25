@@ -138,7 +138,7 @@ test('layout: place <-> pixels (a block index and a fraction of it)', () => {
 
 // ---------------------------------------------------------------- the converter
 const req = createRequire(import.meta.url);
-type W = { makeConverter: (d: Record<string, unknown>) => { convert(p: string): Promise<{ ok: boolean; pdf?: string; by?: string; why?: string; cached?: boolean }>; clean(): void; stop(): void; root: string }; wordScript: (s: string, o: string) => string; encodePs: (s: string) => string; sofficeCandidates: (p: string, env: Record<string, string>) => string[]; cacheName: (p: string, size: number, mtime: number) => string; spawnRun: (c: string, a: string[], o: { timeoutMs: number; onSpawn?: (pid: number) => void; onStdout?: (s: string) => void }) => Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> };
+type W = { makeConverter: (d: Record<string, unknown>) => { convert(p: string): Promise<{ ok: boolean; pdf?: string; by?: string; why?: string; cached?: boolean; cancelled?: boolean }>; clean(): void; stop(): void; cancel(): void; root: string }; wordScript: (s: string, o: string) => string; encodePs: (s: string) => string; sofficeCandidates: (p: string, env: Record<string, string>) => string[]; cacheName: (p: string, size: number, mtime: number) => string; spawnRun: (c: string, a: string[], o: { timeoutMs: number; onSpawn?: (pid: number) => void; onStdout?: (s: string) => void }) => Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> };
 const wp: () => W = () => req('../electron/wordpdf.cjs');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rr-wp-'));
 const mkDocx = (dir: string, name = 'a.docx') => { const f = path.join(dir, name); fs.writeFileSync(f, Buffer.from(docx(['A. x']))); return f; };
@@ -483,6 +483,95 @@ test('T16c 8b: after stop() a run that ends is no reason to try LibreOffice, and
   assert.deepEqual(calls, ['powershell.exe'], 'no LibreOffice after stop');
   assert.ok(!(await c.convert(g)).ok);
   assert.deepEqual(calls, ['powershell.exe']);
+});
+
+// 0.6.1 T34 (DECISIONS 129): Stop ends the running conversion, not the converter
+type RunO = { onSpawn?: (p: number) => void; onStdout?: (s: string) => void };
+type RunR = { code: number | null; stdout: string; stderr: string; timedOut: boolean };
+const ps = (args: string[]) => /\$out = '([^']+)'/.exec(decode(args))![1];
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test('T34: cancel() while Word runs - the child and its Word are ended by their ids, the answer is cancelled, no PDF and no part, no LibreOffice, Word not marked stuck; asked again it converts; one asked after the cancel is not touched', async () => {
+  const dir = tmp(), f = mkDocx(dir), g = mkDocx(dir, 'g.docx'), h = mkDocx(dir, 'h.docx'), killed: number[] = [], calls: string[] = [];
+  let release: (v: RunR) => void = () => { /* */ };
+  let first = true, part = '';
+  const c = wp().makeConverter({ platform: 'win32', env: {}, tmpdir: dir, timeoutMs: 90000, killPid: (pid: number) => killed.push(pid), find: () => '/x/soffice',
+    run: (cmd: string, args: string[], o: RunO) => {
+      calls.push(cmd);
+      if (cmd !== 'powershell.exe') return Promise.resolve({ code: 1, stdout: '', stderr: 'LibreOffice must not run', timedOut: false });
+      part = ps(args);
+      if (first) { first = false; if (o.onSpawn) o.onSpawn(7001); if (o.onStdout) o.onStdout('WORDPID:7002\n'); fs.writeFileSync(part, '%PDF'); return new Promise((res) => { release = res; }); }
+      fs.writeFileSync(part, '%PDF'); return Promise.resolve({ code: 0, stdout: 'WORDPID:7003\nOK\n', stderr: '', timedOut: false });
+    } });
+  const a = c.convert(f), queuedBefore = c.convert(g);
+  await wait(30);
+  c.cancel();
+  const after = c.convert(h); // (asked after the cancel, while the old run still unwinds)
+  assert.deepEqual([...killed].sort(), [7001, 7002], 'the child and the Word, by their ids');
+  release({ code: null, stdout: 'WORDPID:7002\n', stderr: '', timedOut: false });
+  assert.deepEqual(await a, { ok: false, cancelled: true });
+  assert.deepEqual(await queuedBefore, { ok: false, cancelled: true }, 'asked before the cancel, not yet started');
+  const r3 = await after;
+  assert.ok(r3.ok && r3.by === 'Word' && fs.existsSync(r3.pdf!), 'asked after the cancel: converted normally ' + JSON.stringify(r3));
+  const out = c.root; const left = fs.readdirSync(out).filter((n) => n.endsWith('.pdf') && !n.endsWith('.by.txt'));
+  assert.equal(left.length, 1, 'only the later file has a PDF; none (and no part) for the cancelled ones: ' + left.join(','));
+  assert.ok(!left.some((n) => /\.part\.pdf$/.test(n)));
+  assert.ok(!calls.includes('/x/soffice'), 'no LibreOffice after a cancelled Word');
+  // (the same file again: Word is asked again, not "did not answer earlier")
+  const again = await c.convert(f);
+  assert.ok(again.ok && again.by === 'Word', JSON.stringify(again));
+  assert.equal(calls.filter((x) => x === 'powershell.exe').length, 3, 'Word asked for the cancelled file again, afresh');
+  assert.ok(!killed.includes(7003));
+});
+
+test('T34: cancel() while LibreOffice runs (not Windows) - ended by its id, cancelled, no PDF, the work folder gone; asked again it converts', async () => {
+  const dir = tmp(), f = mkDocx(dir), killed: number[] = [];
+  let release: (v: RunR) => void = () => { /* */ }, n = 0;
+  const c = wp().makeConverter({ platform: 'linux', env: {}, tmpdir: dir, killPid: (pid: number) => killed.push(pid), find: () => '/usr/bin/soffice',
+    run: (_cmd: string, args: string[], o: RunO) => {
+      const work = args[args.indexOf('--outdir') + 1], got = path.join(work, 'a.pdf');
+      fs.writeFileSync(got, '%PDF');
+      if (++n === 1) { if (o.onSpawn) o.onSpawn(8001); return new Promise((res) => { release = res; }); }
+      return Promise.resolve({ code: 0, stdout: '', stderr: '', timedOut: false });
+    } });
+  const p = c.convert(f);
+  await wait(30);
+  c.cancel();
+  assert.deepEqual(killed, [8001]);
+  release({ code: 0, stdout: '', stderr: '', timedOut: false }); // (it had even finished: a cancelled run is not kept)
+  assert.deepEqual(await p, { ok: false, cancelled: true });
+  assert.deepEqual(fs.readdirSync(c.root).filter((x) => /\.pdf$|^w\d+-/.test(x)), [], 'no PDF, no work folder');
+  const r = await c.convert(f);
+  assert.ok(r.ok && r.by === 'LibreOffice', JSON.stringify(r));
+});
+
+test('T34: cancel() with nothing running does nothing; a PDF whole before the cancel stays and is used', async () => {
+  const dir = tmp(), f = mkDocx(dir), killed: number[] = [];
+  let n = 0;
+  const c = wp().makeConverter({ platform: 'win32', env: {}, tmpdir: dir, killPid: (pid: number) => killed.push(pid), find: () => null,
+    run: async (_c: string, args: string[]) => { n++; fs.writeFileSync(ps(args), '%PDF'); return { code: 0, stdout: 'WORDPID:9\nOK\n', stderr: '', timedOut: false }; } });
+  c.cancel();
+  const a = await c.convert(f);
+  assert.ok(a.ok && !a.cached, JSON.stringify(a));
+  c.cancel(); // (after it was renamed whole: the PDF stays)
+  assert.deepEqual(killed, [], 'nothing was running: nothing killed');
+  const b = await c.convert(f);
+  assert.ok(b.ok && b.cached && b.pdf === a.pdf && fs.existsSync(a.pdf!), JSON.stringify(b));
+  assert.equal(n, 1);
+});
+
+test('T34: stop() (quit) keeps its meaning - closing, not cancelled; and it ends the run the same way', async () => {
+  const dir = tmp(), f = mkDocx(dir), killed: number[] = [];
+  let release: (v: RunR) => void = () => { /* */ };
+  const c = wp().makeConverter({ platform: 'win32', env: {}, tmpdir: dir, killPid: (pid: number) => killed.push(pid), find: () => null,
+    run: (_c: string, _a: string[], o: RunO) => { if (o.onSpawn) o.onSpawn(7001); if (o.onStdout) o.onStdout('WORDPID:7002\n'); return new Promise((res) => { release = res; }); } });
+  const p = c.convert(f);
+  await wait(30);
+  c.stop();
+  release({ code: null, stdout: '', stderr: '', timedOut: false });
+  const r = await p;
+  assert.ok(!r.ok && !r.cancelled && /closing/.test(r.why!), JSON.stringify(r));
+  assert.deepEqual([...killed].sort(), [7001, 7002]);
 });
 
 test('T16c 9: Word is quit only when its Documents.Count is 0 (else made visible and left); our document closed first', () => {

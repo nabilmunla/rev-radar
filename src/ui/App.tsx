@@ -6,7 +6,7 @@ import { Home } from './Home';
 import { Results } from './Results';
 import { startEngines, engineCount, workers } from './engines';
 import { poolStarted } from './viewpool';
-import { startSession, leave, tickKey } from './runner';
+import { startSession, leave, releasePictures, tickKey } from './runner';
 import { exportExcel, exportPdf, exportJob } from './exporting';
 import { BusyLine, soFar } from './busy';
 import type { ViewStuck } from './engines';
@@ -84,7 +84,7 @@ export function App() {
   const tabTo = (t: typeof st.tab) => { ui.tab = t; bump(); };
 
   const s = st.session;
-  const newComparison = () => { leave(); ui.session = null; ui.selected = null; bump(); };
+  const newComparison = () => { leave(); releasePictures(); ui.session = null; ui.selected = null; bump(); };
   const again = () => { if (!s) return; void startSession(s.oldSet, s.newSet, { zones: s.zones, manual: s.manual, reviewed: s.pairs.filter((p) => p.reviewed).map(tickKey) }); };
 
   return (
@@ -141,7 +141,7 @@ export function App() {
         </div>
       )}
       <div className="sheet">
-        {err && <div className="empty"><h3>The engine did not start</h3><p>{err}</p></div>}
+        {err && <div className="empty"><h3>Rev Radar could not start</h3><p>Close it and open it again. If this screen comes back, install Rev Radar again.</p><p className="detail">Detail: {err}</p></div>}
         {!err && !ready && <div className="empty"><span className="dot busy" /> Starting…</div>}
         {ready && st.tab === 'drawings' && !s && <Home key="pdf" />}
         {ready && st.tab === 'drawings' && s && <Results />}

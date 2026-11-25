@@ -527,11 +527,12 @@ export function compareParas(O: Para[], N: Para[]): DocDiff {
   }
   const cands: [number, number, number][] = [];
   const index = new Map<string, number[]>();
-  N.forEach((_, n) => { if (nTo[n] < 0) for (const w of tN[n].words.keys()) index.set(w, [...(index.get(w) ?? []), n]); });
+  // (postings by push, a common word - 200 or more - skipped before its list is walked: the same hits, 0.6.1 T41)
+  N.forEach((_, n) => { if (nTo[n] < 0) for (const w of tN[n].words.keys()) { const l = index.get(w); if (l) l.push(n); else index.set(w, [n]); } });
   O.forEach((_, o) => {
     if (oTo[o] >= 0 || tO[o].n < 4) return;
     const hit = new Set<number>();
-    for (const w of tO[o].words.keys()) for (const n of index.get(w) ?? []) if ((index.get(w)?.length ?? 0) < 200) hit.add(n);
+    for (const w of tO[o].words.keys()) { const l = index.get(w); if (l && l.length < 200) for (const n of l) hit.add(n); }
     for (const n of hit) { const v = likeness(tO[o], tN[n]); if (v >= 0.8) cands.push([v, o, n]); }
   });
   cands.sort((a, b) => b[0] - a[0]);

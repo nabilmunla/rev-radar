@@ -2,6 +2,28 @@
 
 What changed in each version of Rev Radar (the same notes the app shows after an update).
 
+## 0.6.1
+
+### Fixes
+
+- BOQ (PDF): a description that runs on to the next page is read as one item when the other issue has it whole with the same words - it was shown as changed, and the item after it too
+- Documents: Stop, or going back to Home, while the Word files are being turned into PDFs also stops Word or LibreOffice at once - it went on unseen and the next compare waited for it
+- Messages: when a comparison stops before it finishes, or a sheet is too large for the PC's memory, the message says what happened and what to try, in plain words
+- BOQ: a bill that writes its numbers with a comma for the decimals (1.234,56) is read with the right quantities, rates and amounts
+- BOQ: a measured item whose description begins with "Total" is read as an item, and a unit written with dots and spaces ("SQ. M.") is read as its unit
+- BOQ (Excel): an .xls file that is cut short says so; a date cell reads the same whether Excel stored it as a date or as a number
+- Drawings: Shift + R ticks only the change that is open, on every sheet it was made on - with no change open it could tick one you had not looked at; now it says so and ticks nothing
+- Drawings: Stop and Home also end a sheet that is being compared again, and Save and compare again first ends what was still running - it went on unseen
+- Problem reports: a file path with an apostrophe in a folder name ("Contractor's ...") is taken out whole before the report is shown - part of it was left in
+- Correction: the 0.6.0 notes said bill of quantities pages among the drawings get a listing of their own - they do not; the fix was that an amount on such a page is not taken for a sheet number
+
+### Setup and updates
+
+- Updates: Restart now also asks first when a BOQ or Documents comparison is running or a PDF is being saved, and says what would be lost - it asked only for Drawings
+- Setup: while Windows asks for admin rights the setup keeps its own file locked, and its admin part refuses any job the setup window would not give it
+- Start: a downloaded version that did not open and could not be set aside is not tried again and again - the installed one opens (this fix comes with the Setup, not the in-app update)
+
+
 ## 0.6.0
 
 ### New features
@@ -20,7 +42,7 @@ What changed in each version of Rev Radar (the same notes the app shows after an
 
 - Drawings: the sheet number and title are read from a title block crowded with notes and legend lines
 - Drawings: in a set where some sheet numbers come twice, the other sheets are still paired by number if they are also alike
-- Drawings: bill of quantities pages among the drawings are listed as BOQ pages - an amount was taken for a sheet number
+- Drawings: an amount on a bill of quantities page among the drawings is not taken for a sheet number any more
 - Documents: a table row split over a page break is read as one row when the other issue has it whole - it was shown as changed
 - All three tabs: on a narrow window no tool is hidden any more - the tools bar scrolls sideways
 - BOQ: the panel and the register's Summary show the same lines, pictures included

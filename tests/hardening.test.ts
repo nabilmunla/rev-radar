@@ -137,3 +137,22 @@ test('T2e: a port whose postMessage throws - the call rejects and busy is 0', as
   assert.equal(await p, 'x');
   assert.equal(c.busy, 0);
 });
+
+// ------------------------------------------------------------------ 0.6.1 T37 (DeepSeek 6)
+test('T37 (bug 6): an out-of-memory throw for the picture\'s small buffers destroys the bitmap it made first', () => {
+  pf.openDoc('b6', three());
+  const eng = pf.engineForTests();
+  const orig = eng.pdfium, ex = orig.wasmExports;
+  const oC = e().FPDFBitmap_Create, oD = e().FPDFBitmap_Destroy;
+  try {
+    for (const failAt of [1, 2]) {
+      let made = 0, gone = 0, calls = 0;
+      e().FPDFBitmap_Create = ((...a: number[]) => { made++; return oC(...a); }) as Fn;
+      e().FPDFBitmap_Destroy = ((...a: number[]) => { gone++; return oD(...a); }) as Fn;
+      eng.pdfium = Object.create(orig, { wasmExports: { value: Object.create(ex, { malloc: { value: (n: number) => (++calls === failAt ? 0 : ex.malloc(n)) } }) } });
+      assert.throws(() => pf.renderRGBA('b6', 0, [1, 0, 0, 1, 0, 0], 40, 40), /out of memory/i);
+      eng.pdfium = orig;
+      assert.equal(gone, made, `malloc fails on call ${failAt}: bitmaps made ${made}, destroyed ${gone}`);
+    }
+  } finally { eng.pdfium = orig; e().FPDFBitmap_Create = oC; e().FPDFBitmap_Destroy = oD; pf.closeDoc('b6'); }
+});

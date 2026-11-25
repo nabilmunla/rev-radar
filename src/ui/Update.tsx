@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { rr, type UpdateState, type Updated } from './api';
 import { ui, toast } from './model';
+import { exportJob } from './exporting';
 import { Icon } from './icons';
 
 let current: UpdateState | null = null;
@@ -20,9 +21,18 @@ export function useUpdate(): UpdateState | null {
   return s;
 }
 
-const STOPS = 'A comparison is running. Restarting stops it - the sheets already compared are kept: open it again from Recent comparisons.';
+const STOPS_DRAWINGS = 'A comparison is running. Restarting stops it - the sheets already compared are kept: open it again from Recent comparisons.';
 const mb = (n?: number) => (n ? ` · ${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)} MB` : '');
-const running = () => ui.session?.phase === 'comparing' || ui.session?.phase === 'reading' || ui.session?.phase === 'pairing';
+// (T43, 149) what runs: Drawings reading / pairing / comparing, a BOQ or Documents comparison (its picture reading included), a PDF being written
+const drawingsRun = () => ui.session?.phase === 'comparing' || ui.session?.phase === 'reading' || ui.session?.phase === 'pairing';
+const running = () => drawingsRun() || ui.boq?.phase === 'running' || ui.docs?.phase === 'running' || !!ui.docs?.picReading || !!exportJob.cur;
+function stops(): string {
+  const d = drawingsRun(), b = ui.boq?.phase === 'running', c = ui.docs?.phase === 'running' || !!ui.docs?.picReading;
+  if (d && !b && !c && !exportJob.cur) return STOPS_DRAWINGS;
+  if (!d && !b && !c) return 'A PDF is being saved. Restarting stops it - nothing is saved.';
+  const w = [d && 'Drawings', b && 'BOQ', c && 'Documents'].filter(Boolean).join(', ');
+  return `A comparison is running (${w}). Restarting stops it - a BOQ or Documents comparison is not kept and has to be run again.`;
+}
 
 function Notes({ notes, groups }: { notes?: string[]; groups?: Record<string, string[]> | null }) {
   if (groups && Object.keys(groups).length) {
@@ -54,8 +64,10 @@ export function UpdateCard() {
   if (!afterCard && !offer) return null;
   if (!offer || !s) return <div className="ucards">{afterCard}</div>;
   const v = s.available || '';
+  // (the question stands only while something still runs - a run that ended meanwhile leaves the plain card: T47 sweep C-3)
+  const asking = ask && running();
   const restart = () => {
-    if (running() && !ask) { setAsk(true); return; }
+    if (running() && !asking) { setAsk(true); return; }
     void rr.updateRestart('update');
   };
   return (
@@ -84,9 +96,9 @@ export function UpdateCard() {
       )}
       {s.state === 'ready' && (
         <>
-          <p>{ask ? STOPS : s.pinned ? (s.left ? `You went back from it (to ${s.version}). Restart now to use it again.` : `You went back to ${s.version} before, so that one keeps starting until you restart now.`) : 'It starts the next time you open Rev Radar - or restart now.'}</p>
-          {!ask && open && <Notes notes={s.notes} groups={s.groups} />}
-          <div className="uact">{!ask && <button className="linkbtn" onClick={() => setOpen(!open)}>{open ? 'Hide' : "What's new"}</button>}<span className="grow" /><button className="btn sm" onClick={() => (ask ? setAsk(false) : void rr.updateLater())}>{ask ? 'Wait' : 'Later'}</button><button className="btn sm primary" onClick={restart}>{ask ? 'Restart anyway' : 'Restart now'}</button></div>
+          <p>{asking ? stops() : s.pinned ? (s.left ? `You went back from it (to ${s.version}). Restart now to use it again.` : `You went back to ${s.version} before, so that one keeps starting until you restart now.`) : 'It starts the next time you open Rev Radar - or restart now.'}</p>
+          {!asking && open && <Notes notes={s.notes} groups={s.groups} />}
+          <div className="uact">{!asking && <button className="linkbtn" onClick={() => setOpen(!open)}>{open ? 'Hide' : "What's new"}</button>}<span className="grow" /><button className="btn sm" onClick={() => (asking ? setAsk(false) : void rr.updateLater())}>{asking ? 'Wait' : 'Later'}</button><button className="btn sm primary" onClick={restart}>{asking ? 'Restart anyway' : 'Restart now'}</button></div>
         </>
       )}
       {s.state === 'setup' && (
@@ -147,14 +159,14 @@ export function UpdateSettings() {
       <span className="hint">
         New versions come from Rev Radar's releases on GitHub, signed by its maker: a version that isn't signed, or doesn't match what was signed, is refused. Rev Radar asks before it takes one. Without internet it just works as it is.
       </span>
-      {ask && (
+      {ask && running() && (
         <div className="flexrow">
-          <span className="faint" style={{ flex: 1 }}>{STOPS}</span>
+          <span className="faint" style={{ flex: 1 }}>{stops()}</span>
           <button className="btn sm" onClick={() => setAsk(null)}>Wait</button>
           <button className="btn sm primary" onClick={() => { const w = ask; setAsk(null); go(w); }}>Restart anyway</button>
         </div>
       )}
-      {!ask && (s.previous || (s.pinned && s.newest)) && (
+      {!(ask && running()) && (s.previous || (s.pinned && s.newest)) && (
         <div className="flexrow">
           {s.previous && <button className="btn sm" onClick={() => (running() ? setAsk('back') : go('back'))} title="Rev Radar closes and opens again on the version you had before">Go back to {s.previous}</button>}
           {s.pinned && s.newest && <button className="btn sm" onClick={() => (running() ? setAsk('newest') : go('newest'))}>Use {s.newest} again</button>}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -24,7 +25,12 @@ func isElevated() bool                         { return false }
 func exeLocked(string) bool                    { return false }
 func safeDllSearch()                           {}
 func isRemote(string) bool                     { return false }
-func inProgramFiles(string) bool               { return true }
+
+// (153: under the test root, "machine" stands for Program Files)
+func inProgramFiles(p string) bool {
+	pf := filepath.Clean(filepath.Join(testRoot, "machine"))
+	return strings.HasPrefix(filepath.Clean(p), pf+string(filepath.Separator))
+}
 func deleteAtReboot(p string)                  { logf("left for later: %s", p) }
 func openReport(string) reporter               { return nopReporter{} }
 func launch(path string, args ...string) error { return exec.Command(path, args...).Start() }

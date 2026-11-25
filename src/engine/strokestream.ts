@@ -185,6 +185,7 @@ export class StrokeMergeStream {
           this.flushPending(); this.flushPath();
           this.emit(this.segStart, i);
           this.segStart = i;
+          this.strokesOut++; // (a stroke written as it was is a stroke out too - 0.6.1 T38, DeepSeek 15)
         }
         continue;
       }

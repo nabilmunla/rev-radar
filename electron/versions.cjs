@@ -115,6 +115,27 @@ function beginStart(dir) {
   try { writeJson(startsFile(dir), { n: n + 1, at: Date.now() }); } catch (_) { /* a read-only store: just run it */ }
   return true;
 }
+/**
+ * Which copy this start runs (boot.cjs calls it; choose/beginStart/note come in as arguments so the
+ * loop can be tested without Electron). A copy that cannot be set aside (a store that cannot be
+ * written) is offered by choose() again - a folder rejected once in this start is not taken a second
+ * time: the installed copy runs (DECISIONS 154). Returns { pick, before }: pick null = the installed
+ * copy; before = what starts.json held before this start was counted (for undoStart).
+ */
+function pickStart(choose, beginStart, note, read = readJson) {
+  const rejected = new Set();
+  const take = () => { try { return choose(); } catch (e) { note('choose: ' + (e && e.stack || e)); return null; } };
+  let pick = take();
+  while (pick && !pick.builtin) {
+    if (rejected.has(pick.dir)) return { pick: null, before: null };
+    const before = read(startsFile(pick.dir));
+    if (beginStart(pick.dir)) return { pick, before };
+    rejected.add(pick.dir);
+    note('set aside ' + pick.version + ' (its window did not come up)');
+    pick = take();
+  }
+  return { pick: pick && pick.builtin ? pick : null, before: null };
+}
 /** this process turned out not to be a start (another Rev Radar already runs): the count goes back */
 function undoStart(dir, before) { try { if (before) writeJson(startsFile(dir), before); else fs.rmSync(startsFile(dir), { force: true }); } catch (_) { /* */ } }
 function startedOk(dir) { try { fs.rmSync(startsFile(dir), { force: true }); } catch (_) { /* */ } }
@@ -226,4 +247,4 @@ function bundledNotes(appDir, version) {
     return g && typeof g === 'object' ? g : null;
   } catch (_) { return null; }
 }
-module.exports = { readJson, writeJson, newer, candidates, choose, pinned, pin, setupRan, beginStart, undoStart, startedOk, setAside, unzip, installPackage, tidy, bundledNotes, MAX_FAILED_STARTS };
+module.exports = { readJson, writeJson, newer, candidates, choose, pinned, pin, setupRan, beginStart, pickStart, undoStart, startedOk, setAside, unzip, installPackage, tidy, bundledNotes, MAX_FAILED_STARTS };

@@ -301,16 +301,26 @@ func doUninstall(dir string, prog progressFn) error {
 func park(setup, dir string) (string, error) {
 	tag := strconv.FormatInt(time.Now().UnixNano()%1e9, 36)
 	var last error
-	for _, to := range []string{
-		filepath.Join(os.TempDir(), "Rev Radar Setup (removed "+tag+").exe"),
-		filepath.Join(filepath.Dir(dir), ".revradar-uninstall-"+tag+".exe"),
-	} {
-		if err := os.Rename(setup, to); err != nil {
-			last = err
-			continue
+	// (0.6.1 T44: the setup that asked for admin rights holds this very file until the first line it gets from here -
+	// a few moments, so the move is tried again for a while)
+	moved := ""
+	_ = retry(5*time.Second, func() error {
+		for _, to := range []string{
+			filepath.Join(os.TempDir(), "Rev Radar Setup (removed "+tag+").exe"),
+			filepath.Join(filepath.Dir(dir), ".revradar-uninstall-"+tag+".exe"),
+		} {
+			if err := os.Rename(setup, to); err != nil {
+				last = err
+				continue
+			}
+			moved = to
+			return nil
 		}
-		logf("uninstaller moved to %s", to)
-		return to, nil
+		return last
+	})
+	if moved != "" {
+		logf("uninstaller moved to %s", moved)
+		return moved, nil
 	}
 	return "", last
 }
@@ -386,8 +396,16 @@ func runWorker(p *Payload, arg string) int {
 		logf("worker: %v", err)
 		return workerBadJob
 	}
+	// (0.6.1 T44, DECISIONS 153) the job is checked by the window's own rules before anything is written: any program
+	// can start this with a job of its making
+	if why := jobProblem(j, isElevated()); why != "" {
+		logf("worker: job refused (%s): %+v", why, j)
+		return workerBadJob
+	}
 	rep := openReport(j.Pipe)
 	defer rep.close()
+	// (152) the first line: the setup lets go of its file now - park below may then move it
+	rep.send("h")
 	err = runJob(p, j, func(pct float64, stage string) { rep.send(fmt.Sprintf("p %.4f %s", pct, stage)) })
 	res := jobResult{OK: err == nil}
 	if err != nil {
@@ -404,6 +422,49 @@ func runWorker(p *Payload, arg string) int {
 		return workerRunning
 	}
 	return workerFailed
+}
+
+// jobProblem (153): what is wrong with a job handed to the admin side ("" - nothing). Install: the window's checkDir, and
+// with admin rights scope "machine" only inside Program Files (known folders) and scope "user" not at all - the window
+// never asks for it: needsElevation would for a folder the person can't write, but checkDir refuses that folder first.
+// Uninstall: a Rev Radar install, its record readable, a machine one inside Program Files (the window asks admin rights
+// for a person's own install whose folder it can't write - that stays allowed).
+func jobProblem(j Job, elevated bool) string {
+	switch j.Kind {
+	case "install":
+		sc := j.Opts.Scope
+		if sc != "machine" && sc != "user" {
+			return "scope " + sc
+		}
+		if elevated && sc == "user" {
+			return "a person's own install with admin rights"
+		}
+		dir := orDefault(j.Opts.Dir, sc)
+		if why := checkDir(sc, dir); why != "" {
+			return why
+		}
+		if sc == "machine" && !inProgramFiles(dir) {
+			return "not inside Program Files"
+		}
+		return ""
+	case "uninstall":
+		d := filepath.Clean(j.Dir)
+		if !filepath.IsAbs(d) || !looksInstalled(d) {
+			return "not a Rev Radar install"
+		}
+		ii, err := readInstall(d)
+		if err != nil || ii == nil {
+			return "no readable install record"
+		}
+		if ii.Scope == "machine" && !inProgramFiles(d) {
+			return "a machine install outside Program Files"
+		}
+		if ii.Scope != "" && ii.Scope != "machine" && ii.Scope != "user" {
+			return "scope " + ii.Scope
+		}
+		return ""
+	}
+	return "kind " + j.Kind
 }
 
 // runAs does the job here, or in an elevated copy when this process can't write there.

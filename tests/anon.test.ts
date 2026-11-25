@@ -58,3 +58,34 @@ test('Linux: the app\'s place goes, its code locations stay; files under /run/me
   assert.equal(scrub('at load (/tmp/.mount_RevRadAb12Cd/resources/app/electron/main.cjs:3:1)', who), 'at load (<app>/electron/main.cjs:3:1)');
   for (const t of ["ENOENT '/run/media/jdoe/USB Key/Tower B.pdf'", 'saved /opt/jobs/Falcon/x.pdf', "/media/jdoe/Disk/Bids/a.pdf"]) assert.ok(!/jdoe|Tower|Falcon|Bids/.test(scrub(t, who)), t + ' -> ' + scrub(t, who));
 });
+
+test("an apostrophe inside a path does not end it (bug 28); a path opened by one ends at the next", () => {
+  const a = scrub("comparing C:\\Bids\\Contractor's Tower\\A-101.pdf fails", who);
+  assert.ok(!/Tower|A-101|Contractor|\bs\b/.test(a), 'drive path: ' + a);
+  assert.ok(a.startsWith('comparing <path>'), a);
+  const u = scrub("reading \\\\srv\\Bids\\Contractor's Tower\\A-101.pdf now", who);
+  assert.ok(!/Tower|A-101|Contractor/.test(u), 'UNC: ' + u);
+  const l = scrub("reading /home/ann/Contractor's Tower/A-101.pdf now", who);
+  assert.ok(!/Tower|A-101|Contractor|ann/.test(l), 'Linux: ' + l);
+  const app = scrub("at x (/opt/Contractor's/resources/app/electron/main.cjs:5:1)", who);
+  assert.ok(!/Contractor/.test(app) && app.includes('<app>/'), 'app: ' + app);
+  const w = scrub("EPERM 'C:\\x\\y.pdf' and more", who);
+  assert.ok(w.includes('and more') && !/y\.pdf|C:/.test(w), 'quoted: ' + w);
+  const wu = scrub("EPERM '\\\\srv\\x\\y.pdf' and more", who);
+  assert.ok(wu.includes('and more') && !/y\.pdf|srv/.test(wu), 'quoted UNC: ' + wu);
+  const wl = scrub("EPERM '/home/ann/y.pdf' and more", who);
+  assert.ok(wl.includes('and more') && !/y\.pdf|ann/.test(wl), 'quoted Linux: ' + wl);
+});
+
+test("T47 sweep C-2: a quoted path with an apostrophe inside its names - nothing of it left; the closing quote still ends it", () => {
+  for (const [line, gone] of [
+    ["opened 'C:\\Users\\Nabil\\Bob's Tower\\Contractor's Notes.pdf' then", /Tower|Contractor|Notes|Bob/],
+    ["opened 'C:\\Users\\Nabil\\Bob's Bids\\Smith notes.txt", /Bids|Smith|Bob/],
+    ["opened '\\\\srv\\Bob's Tower\\A-101.pdf' then", /Tower|A-101|srv/],
+    ["opened '/home/ann/Bob's Tower/A-101.pdf' then", /Tower|A-101|ann/],
+  ] as [string, RegExp][]) {
+    const s = scrub(line, who);
+    assert.ok(!gone.test(s), s);
+    if (line.endsWith(' then')) assert.ok(s.endsWith(' then'), 'the words after the quote stay: ' + s);
+  }
+});

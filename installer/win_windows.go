@@ -79,10 +79,11 @@ func isRemote(p string) bool {
 	return windows.GetDriveType(r) == windows.DRIVE_REMOTE
 }
 
-// inProgramFiles: inside one of the Program Files folders (only admins can change files there).
+// inProgramFiles: inside one of the Program Files folders (only admins can change files there) - found by Windows'
+// known folders, never the environment variables: the program that starts the setup sets those (0.6.1 T44, 153)
 func inProgramFiles(p string) bool {
 	d := strings.ToLower(filepath.Clean(p))
-	for _, pf := range []string{os.Getenv("ProgramW6432"), os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)"), knownFolder(windows.FOLDERID_ProgramFilesX64, "")} {
+	for _, pf := range []string{knownFolder(windows.FOLDERID_ProgramFilesX64, ""), knownFolder(windows.FOLDERID_ProgramFiles, ""), knownFolder(windows.FOLDERID_ProgramFilesX86, "")} {
 		if pf = strings.ToLower(filepath.Clean(pf)); pf != "." && pf != "" && strings.HasPrefix(d, pf+`\`) {
 			return true
 		}
@@ -291,6 +292,9 @@ func runElevated(j Job, prog progressFn) error {
 		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS, 1, 0, 64<<10, 0, nil)
 	lines := make(chan string, 256)
 	readerDone := make(chan struct{})
+	// (152: the first line from the admin side - the setup's own file is let go then)
+	first := make(chan struct{})
+	var firstOnce sync.Once
 	if err != nil {
 		logf("pipe: %v", err)
 		close(readerDone)
@@ -299,6 +303,13 @@ func runElevated(j Job, prog progressFn) error {
 		go func() {
 			defer close(readerDone)
 			if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
+				return
+			}
+			// (0.6.1 T47 sweep C-1) only the admin side speaks here: a program of the person's own that found the pipe
+			// first would otherwise let go of the setup's file with a forged first line (152) - its lines are not read,
+			// the file stays held until the start returns
+			if !clientElevated(h) {
+				logf("pipe: the program on the other end does not have admin rights - not read")
 				return
 			}
 			var pend []byte
@@ -316,6 +327,7 @@ func runElevated(j Job, prog progressFn) error {
 					}
 					lines <- string(pend[:k])
 					pend = pend[k+1:]
+					firstOnce.Do(func() { close(first) })
 				}
 			}
 		}()
@@ -331,7 +343,9 @@ func runElevated(j Job, prog progressFn) error {
 		if isRemote(exe) {
 			exe = toUNC(exe) // the admin side may not see this person's mapped drive letters
 		}
-		code, err := shellExecute("runas", exe, quoteArgs("--worker", base64.StdEncoding.EncodeToString(b)), true)
+		code, err := startHeld(exe, holdFile, func(path string) (uint32, error) {
+			return shellExecute("runas", path, quoteArgs("--worker", base64.StdEncoding.EncodeToString(b)), true)
+		}, first)
 		done <- exit{code, err}
 	}()
 	var res *jobResult
@@ -773,4 +787,38 @@ func findInstalled() (string, *InstallInfo) {
 		return dir, ii
 	}
 	return "", nil
+}
+
+// holdFile (152): the file opened for reading, shared for reading only - while the handle is open nobody can rename,
+// delete or write it
+func holdFile(p string) (func(), error) {
+	n, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return nil, err
+	}
+	h, err := windows.CreateFile(n, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	return func() { windows.CloseHandle(h) }, nil
+}
+
+// clientElevated: the process at the other end of the pipe runs with admin rights (a program of the person's own
+// cannot without Windows asking)
+func clientElevated(h windows.Handle) bool {
+	var pid uint32
+	if windows.GetNamedPipeClientProcessId(h, &pid) != nil || pid == 0 {
+		return false
+	}
+	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(p)
+	var t windows.Token
+	if windows.OpenProcessToken(p, windows.TOKEN_QUERY, &t) != nil {
+		return false
+	}
+	defer t.Close()
+	return t.IsElevated()
 }

@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('rr', {
   showInFolder: (p) => ipcRenderer.invoke('shell:show', p),
   tempPath: (name) => ipcRenderer.invoke('paths:temp', name),
   docxConvert: (p) => ipcRenderer.invoke('docx:convert', p),
+  docxCancel: () => ipcRenderer.invoke('docx:cancel'),
   cacheGet: (k) => ipcRenderer.invoke('cache:get', k),
   cachePreview: (k) => ipcRenderer.invoke('cache:preview', k),
   cachePut: (k, json, thumb, preview) => ipcRenderer.invoke('cache:put', k, json, thumb, preview),

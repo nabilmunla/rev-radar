@@ -425,7 +425,8 @@ export function movedParts(o: Gray, n: Gray, pxPerMm: number, changed: { add: Ui
     // off must not move with it). One part per move: a view in several pieces is one view.
     const id = parts.length + 1;
     let marked = 0;
-    const mark = (pc: (typeof pieces)[0]) => { for (let i = 0; i < pc.full.length; i++) if (pc.full[i] && !label[i]) { label[i] = id; marked++; } };
+    // (the moved ink of the blocks it claims - a piece already inside a part's footprint adds none: 0.6.1 T37, DeepSeek 5)
+    const mark = (pc: (typeof pieces)[0]) => { let s = 0; for (let i = 0; i < pc.full.length; i++) if (pc.full[i] && !label[i]) { label[i] = id; marked++; s += S[i]; } return s; };
     const hosts: (typeof pieces)[0][] = [];
     let ink = 0;
     for (const pc of pieces) {
@@ -436,7 +437,7 @@ export function movedParts(o: Gray, n: Gray, pxPerMm: number, changed: { add: Ui
       const ok = pc.big && pc.zin <= 0.04 * pc.s && pc.zring <= 0.06 * pc.s && pc.zline <= 0.01 * pc.s && pc.paper < 0.3 && !whole;
       if (trace) trace.comps.push(`shift ${g.dx},${g.dy} part ${pc.box[0] * B},${pc.box[1] * B}-${(pc.box[2] + 1) * B},${(pc.box[3] + 1) * B} S ${pc.s} Z inside ${pc.zin} (${(pc.zin / pc.s * 100).toFixed(1)}%) round ${pc.zring} (${(pc.zring / pc.s * 100).toFixed(1)}%) lines ${(pc.zline / pc.s * 100).toFixed(2)}% border ${(pc.paper * 100).toFixed(0)}% ${ok ? 'MOVED' : pc.big ? 'no' : 'small'}`);
       if (!ok || id > 250) continue;
-      mark(pc); hosts.push(pc); ink += pc.s;
+      ink += mark(pc); hosts.push(pc);
     }
     if (!hosts.length) continue;
     // small pieces that moved the same way right beside a moved view (its title, a north point):
@@ -445,7 +446,7 @@ export function movedParts(o: Gray, n: Gray, pxPerMm: number, changed: { add: Ui
     for (const pc of pieces) {
       if (hosts.includes(pc) || pc.zin > 0.04 * pc.s || pc.zring > 0.3 * pc.s || pc.zline > 0.01 * pc.s || pc.paper >= 0.3) continue;
       if (!hosts.some((host) => Math.max(host.box[0] - pc.box[2], pc.box[0] - host.box[2], host.box[1] - pc.box[3], pc.box[1] - host.box[3]) <= near)) continue;
-      mark(pc); ink += pc.s;
+      ink += mark(pc);
       if (trace) trace.comps.push(`  with it: ${pc.box[0] * B},${pc.box[1] * B}-${(pc.box[2] + 1) * B},${(pc.box[3] + 1) * B}`);
     }
     // (all of it already taken by a part found before: nothing new)

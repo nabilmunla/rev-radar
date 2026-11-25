@@ -11,12 +11,18 @@ import type { PageToks } from './sheets';
 import { ui, bump, toast, sizeGroup, realAreas, refKey, reviewKey, needsReview, type Pair, type Session, type SetInfo, type ResultR, type Zone, type Manual } from './model';
 
 /** a sheet still not compared after this long is stopped */
-const WATCHDOG_MS = 6 * 60 * 1000;
+const watchdogMs = (): number => { try { return Number(localStorage.getItem('rr-watchdog-ms')) || 6 * 60 * 1000; } catch { return 6 * 60 * 1000; } }; // (tests shorten it: localStorage rr-watchdog-ms)
 const TOO_LONG = 'This sheet took over 6 minutes and was stopped (an extremely heavy or damaged drawing). Try again, or try a lower checking resolution in Settings.';
 
 const CHANGED = 'The file was saved over while it was being compared. Try again.';
 
 /** engine version: results from an older engine are compared again */
+
+/** (0.6.1 T35, DECISIONS 130) a sheet too heavy for the PC's memory at this checking resolution */
+export const TOO_LARGE_TEXT = 'This sheet is too large to compare at this checking resolution - the PC ran out of memory on it. Lower the checking resolution (Settings) and try again.';
+/** (0.6.1 T35) the sheet's compare ended twice before it finished */
+export const STOPPED_TWICE_TEXT = 'Comparing this sheet stopped twice before it finished. Try again - if it stops again, the drawing may be damaged or too heavy for this PC.';
+
 export const ENGINE_V = 9;
 
 // ---------------------------------------------------------------- reading the issues
@@ -113,6 +119,7 @@ async function sheetsOf(files: FileItem[], s: Session, which: string, live: () =
 let runId = 0;
 
 export async function startSession(oldSet: SetInfo, newSet: SetInfo, keep?: { zones?: Zone[]; manual?: Manual; reviewed?: string[] }) {
+  endRuns(); // (DECISIONS 148c: what runs for the session on screen ends first - every caller)
   const my = ++runId;
   // the same two issues compared before (picked again, not opened from Recent): what was done
   // then - ticks, left-out spots, hand pairs - is kept, not wiped
@@ -249,7 +256,14 @@ async function pairAll(olds: SheetRef[], news: SheetRef[], s: Session, live: () 
 
 // ---------------------------------------------------------------- the queue
 
-const running = new Map<string, EngineClient>();
+/** (DECISIONS 148a) what is comparing a sheet now: one registration object per call, removed only by the call that made it */
+export interface Reg { c: EngineClient }
+const running = new Map<string, Reg>();
+export function register(id: string, c: EngineClient): Reg { const reg: Reg = { c }; running.set(id, reg); return reg; }
+export function unregister(id: string, reg: Reg) { if (running.get(id) === reg) running.delete(id); }
+export const registered = (id: string): Reg | undefined => running.get(id);
+/** end the engines of every registration (the engine starts afresh) */
+function killRegistered() { for (const reg of running.values()) { const n = workers.indexOf(reg.c); if (n >= 0) void rr.engineKill('w' + n); } }
 type QPair = Pair & { pri?: number; job?: number; tries?: number };
 /** look at this pair next (the user opened it) */
 export function prioritise(id: string) {
@@ -282,10 +296,10 @@ async function runQueue(s: Session, my: number) {
       if (!p) return;
       p.status = 'running';
       p.since = performance.now();
-      running.set(p.id, c);
+      const reg = register(p.id, c);
       bump();
-      await comparePairJob(c, p, s);
-      running.delete(p.id);
+      await comparePairJob(c, p, s, false, reg);
+      unregister(p.id, reg);
       classify(s);
       bump();
     }
@@ -319,6 +333,9 @@ export const onRerun = new Set<(p: Pair) => void>();
 export async function rerun(p: Pair, fresh = false) {
   const s = ui.session;
   if (!s) return;
+  // (DECISIONS 148b) this call writes nothing once its session is not the one on screen or its run has ended
+  const my = runId;
+  const gone = () => ui.session !== s || my !== runId;
   // (a tick on a sheet that could not be compared said "dealt with", not "its changes seen")
   const wasOpen = p.status === 'error';
   // (a tick made in this session: the changes it counted then - more now, not ticked any more - RR-030)
@@ -333,13 +350,18 @@ export async function rerun(p: Pair, fresh = false) {
     const ref = p[side];
     if (!ref?.bad) continue;
     const fresh2 = await refreshRef(c, ref);
+    if (gone()) return;
     if (fresh2.bad) { p.status = 'error'; p.error = `Could not read the ${side === 'old' ? 'old' : 'new'} issue's file: ${fresh2.bad}. ${ASK_AGAIN}`; classify(s); remember(s); bump(); return; }
     p[side] = fresh2;
   }
   if (!p.old || !p.neu) { p.status = p.old ? 'removed' : 'new'; classify(s); remember(s); bump(); void sheetPictures(s, runId); return; }
-  p.status = 'running'; bump();
+  p.status = 'running';
+  const reg = register(p.id, c);
+  bump();
   const before = p.reviewed ? (p.tickedReal ?? (wasOpen ? 0 : countedThen)) : -1;
-  await comparePairJob(c, p, s, fresh);
+  await comparePairJob(c, p, s, fresh, reg);
+  unregister(p.id, reg);
+  if (gone()) return;
   classify(s);
   if (before >= 0 && p.reviewed) { p.tickedReal = before; staleTicks(s, [p]); }
   remember(s); bump();
@@ -362,7 +384,7 @@ async function sha1(s: string): Promise<string> {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function comparePairJob(c: EngineClient, p: Pair, s: Session, fresh = false) {
+async function comparePairJob(c: EngineClient, p: Pair, s: Session, fresh = false, reg?: Reg) {
   const t0 = performance.now();
   const o = p.old!, n = p.neu!;
   const q = p as QPair;
@@ -393,7 +415,7 @@ async function comparePairJob(c: EngineClient, p: Pair, s: Session, fresh = fals
     // a sheet that never finishes (a damaged or monstrous drawing) must not hold an engine for
     // good: past the limit the engine is closed (it starts afresh) and the sheet is marked
     let timedOut = false;
-    const dog = setTimeout(() => { timedOut = true; const k = workers.indexOf(c); if (k >= 0) void rr.engineKill('w' + k); }, WATCHDOG_MS);
+    const dog = setTimeout(() => { if (!reg || running.get(p.id) !== reg) return; timedOut = true; const k = workers.indexOf(c); if (k >= 0) void rr.engineKill('w' + k); }, watchdogMs());
     let r: any;
     try { r = await c.call<any>('compare', [fileArg(o.file), o.page, fileArg(n.file), n.page, settings, p.manualAlign || null]); }
     catch (e) { if (timedOut) throw new Error(TOO_LONG); throw e; }
@@ -428,11 +450,10 @@ async function comparePairJob(c: EngineClient, p: Pair, s: Session, fresh = fals
       // a network drive that dropped, or a file being saved: give it a moment
       if (m === READ_FAIL || m === CHANGED) await new Promise((r) => setTimeout(r, 2000));
       if (q.job !== job) return;
-      return comparePairJob(c, p, s, fresh);
+      return comparePairJob(c, p, s, fresh, reg);
     }
     p.status = 'error';
-    p.error = fatal ? 'The engine ran out of memory on this sheet (very large drawing). Try again at a lower checking resolution (Settings).'
-      : /restarted|was closed/.test(m) ? 'The engine stopped while comparing this sheet (twice). Try again.' : m;
+    p.error = fatal ? TOO_LARGE_TEXT : /restarted|was closed/.test(m) ? STOPPED_TWICE_TEXT : m;
   }
 }
 
@@ -465,14 +486,22 @@ export async function previewOf(p: Pair): Promise<Uint8Array | null> {
   return previews.get(p.cacheKey) || (await rr.cachePreview(p.cacheKey));
 }
 
-/** leave this comparison (Home): whatever it is doing - reading, pairing, comparing - ends */
-export function leave() {
+/** (DECISIONS 148c) whatever runs ends: reading, pairing, every sheet being compared (its engine is closed) */
+function endRuns() {
   runId++;
   queueGen++;
-  for (const [, c] of running) { const n = workers.indexOf(c); if (n >= 0) void rr.engineKill('w' + n); }
+  killRegistered();
   running.clear();
   // the sheets being compared: their answers (or the engine's end) are not wanted any more
   for (const p of (ui.session?.pairs || []) as QPair[]) if (p.status === 'running') { p.status = 'waiting'; p.job = 0; p.tries = 0; }
+}
+
+/** (DECISIONS 148e) the session on screen is being dropped (Home): its thumbnails are released */
+export function releasePictures() { dropPictures(ui.session); }
+
+/** leave this comparison (Home): whatever it is doing - reading, pairing, comparing - ends */
+export function leave() {
+  endRuns();
   // (how far it got, for the list of recent comparisons)
   if (ui.session && ui.session.pairs.length) void remember(ui.session);
 }
@@ -483,7 +512,7 @@ export function stop() {
   if (!s || s.phase !== 'comparing') return;
   s.phase = 'stopped';
   queueGen++;
-  for (const [, c] of running) { const n = workers.indexOf(c); if (n >= 0) void rr.engineKill('w' + n); }
+  killRegistered();
   // (a sheet stopped on purpose starts its tries afresh: two quick Stop / Go on must not read as
   // an engine that keeps dying on it)
   for (const p of s.pairs as QPair[]) if (p.status === 'running') { p.status = 'waiting'; p.job = 0; p.tries = 0; }

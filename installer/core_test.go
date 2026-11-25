@@ -10,10 +10,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -573,5 +576,122 @@ func TestReinstallIntoAFolderLeftWithThePersonsFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(other, "notes.txt"), []byte("x"), 0o644)
 	if checkDir("user", other) == "" {
 		t.Error("any other folder with files in it is still refused")
+	}
+}
+
+// ---------------------------------------------------------------- 0.6.1 T44 (DECISIONS 152, 153)
+
+// 152: the setup's own file is held before Windows is asked, and let go on the first line / a failed start / a
+// declined prompt - never before
+func TestHoldOrder(t *testing.T) {
+	setupTest(t)
+	type ev struct {
+		mu  sync.Mutex
+		log []string
+	}
+	add := func(e *ev, x string) { e.mu.Lock(); e.log = append(e.log, x); e.mu.Unlock() }
+	seen := func(e *ev) string { e.mu.Lock(); defer e.mu.Unlock(); return strings.Join(e.log, ",") }
+	mk := func(e *ev, holdErr error) func(string) (func(), error) {
+		return func(p string) (func(), error) {
+			if holdErr != nil {
+				add(e, "hold failed")
+				return nil, holdErr
+			}
+			add(e, "held")
+			return func() { add(e, "released") }, nil
+		}
+	}
+	// the first line arrives while the admin side runs: released then, before start returns
+	{
+		e := &ev{}
+		first := make(chan struct{})
+		code, err := startHeld("x.exe", mk(e, nil), func(string) (uint32, error) {
+			add(e, "start")
+			close(first)
+			for i := 0; i < 200 && seen(e) != "held,start,released"; i++ {
+				time.Sleep(5 * time.Millisecond)
+			}
+			add(e, "worker done")
+			return 0, nil
+		}, first)
+		if err != nil || code != 0 || seen(e) != "held,start,released,worker done" {
+			t.Fatalf("first line: %v %v %v", code, err, e.log)
+		}
+	}
+	// a declined prompt / a failed start: held through the start, released after it - never before
+	for _, fail := range []error{errAdminRefused, errors.New("start failed")} {
+		e := &ev{}
+		_, err := startHeld("x.exe", mk(e, nil), func(string) (uint32, error) {
+			time.Sleep(20 * time.Millisecond)
+			add(e, "start returns")
+			return 0, fail
+		}, make(chan struct{}))
+		if err != fail || seen(e) != "held,start returns,released" {
+			t.Fatalf("%v: %v %v", fail, err, e.log)
+		}
+	}
+	// not held: Windows is never asked
+	{
+		e := &ev{}
+		started := false
+		_, err := startHeld("x.exe", mk(e, errors.New("sharing violation")), func(string) (uint32, error) { started = true; return 0, nil }, make(chan struct{}))
+		var nh errNotHeld
+		if started || !errors.As(err, &nh) || !strings.Contains(err.Error(), "did not ask") {
+			t.Fatalf("hold failed: started=%v err=%v", started, err)
+		}
+	}
+}
+
+// 153: the admin side refuses a job the window would not make - nothing written
+func TestWorkerRefusesJobs(t *testing.T) {
+	root := setupTest(t)
+	arg := func(j Job) string { b, _ := json.Marshal(j); return base64.StdEncoding.EncodeToString(b) }
+	s1 := fakeSetup(t, root, "0.6.1", appFiles("0.6.1"))
+	p, err := openPayload(s1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := filepath.Join(root, "Public", "x")
+	for name, j := range map[string]Job{
+		"unknown kind":                       {Kind: "format"},
+		"machine outside Program Files":      {Kind: "install", Opts: Options{Scope: "machine", Dir: pub}},
+		"odd scope":                          {Kind: "install", Opts: Options{Scope: "everyone", Dir: pub}},
+		"relative folder":                    {Kind: "install", Opts: Options{Scope: "machine", Dir: "x"}},
+		"uninstall a folder not Rev Radar's": {Kind: "uninstall", Dir: filepath.Join(root, "Documents")},
+	} {
+		if code := runWorker(p, arg(j)); code != workerBadJob {
+			t.Errorf("%s: code %d", name, code)
+		}
+	}
+	if _, err := os.Stat(pub); !os.IsNotExist(err) {
+		t.Errorf("something was written: %v", err)
+	}
+	// a machine install's record outside Program Files: refused, the folder untouched
+	fake := filepath.Join(root, "Public", "Rev Radar")
+	if err := os.MkdirAll(fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(fake, exeName), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(fake, "install.json"), []byte(`{"scope":"machine","files":["Rev Radar.exe","install.json"]}`), 0o644)
+	if code := runWorker(p, arg(Job{Kind: "uninstall", Dir: fake})); code != workerBadJob || !fileExists(filepath.Join(fake, exeName)) {
+		t.Errorf("machine record outside Program Files: code %d", code)
+	}
+	// with admin rights, a person's own install is never asked for
+	if why := jobProblem(Job{Kind: "install", Opts: Options{Scope: "user", Dir: filepath.Join(root, "user", appName)}}, true); why == "" {
+		t.Error("elevated user install accepted")
+	}
+	// the window's own jobs pass: everyone's install inside Program Files, a person's own install, its uninstall
+	if why := jobProblem(Job{Kind: "install", Opts: Options{Scope: "machine"}}, true); why != "" {
+		t.Errorf("machine default refused: %s", why)
+	}
+	if why := jobProblem(Job{Kind: "install", Opts: Options{Scope: "user"}}, false); why != "" {
+		t.Errorf("user default refused: %s", why)
+	}
+	mine := filepath.Join(root, "machine", appName)
+	if err := doInstall(p, Options{Scope: "machine", Dir: mine}, func(float64, string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if why := jobProblem(Job{Kind: "uninstall", Dir: mine}, true); why != "" {
+		t.Errorf("own machine uninstall refused: %s", why)
 	}
 }

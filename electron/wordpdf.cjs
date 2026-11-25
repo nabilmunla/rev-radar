@@ -125,7 +125,8 @@ function spawnRun(cmd, args, { timeoutMs = TIMEOUT, onSpawn, onStdout } = {}) {
   });
 }
 
-/** the converter: `convert(path)` -> { ok, pdf, by } or { ok: false, why, none? }; `stop()` then `clean()` at quit */
+/** the converter: `convert(path)` -> { ok, pdf, by } or { ok: false, why, none? } or { ok: false, cancelled: true };
+ *  `cancel()` at Stop; `stop()` then `clean()` at quit */
 function makeConverter(d = {}) {
   const platform = d.platform || process.platform, env = d.env || process.env;
   const tmpdir = d.tmpdir || os.tmpdir();
@@ -152,6 +153,10 @@ function makeConverter(d = {}) {
   const keepBy = (out, by) => { madeBy.set(out, by); try { fs.writeFileSync(byOf(out), by); } catch (_) { /* the PDF still serves */ } };
   // (what is running now, for stop() at quit: the child, and the Word it started once its id was printed)
   let child = 0, wordPid = 0, stopped = false;
+  // (0.6.1 T34: Stop in the window. `gen` counts the cancels: a conversion asked before one answers "cancelled", one asked
+  //  after it runs; `busy` is the conversions asked and not yet answered, so a cancel with none does nothing)
+  let gen = 0, busy = 0, wordKilled = 0;
+  const cancelledAnswer = { ok: false, cancelled: true };
   const rm = (f, o) => { try { fs.rmSync(f, { force: true, ...(o || {}) }); return true; } catch (_) { return false; } };
   const partOf = (out) => out.replace(/\.pdf$/i, '') + '.part.pdf'; // (still ends in .pdf: whatever Word does with the extension, it is the same)
   // (only a whole line: the output comes in pieces, and "WORDPID:12" before "34" would kill process 12 - sweep, 17 Nov)
@@ -171,14 +176,20 @@ function makeConverter(d = {}) {
     return Promise.resolve(run(cmd, args, o)).finally(() => { child = 0; });
   };
 
-  async function viaWord(src, out) {
+  async function viaWord(src, out, dead) {
     const part = partOf(out);
     rm(part); // (what a stopped run left)
-    wordPid = 0;
+    wordPid = 0; wordKilled = 0;
     const script = wordScript(src, part);
     const r = await go(platform === 'win32' ? 'powershell.exe' : 'pwsh', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encodePs(script)]);
     const pid = wordPid || wordPidIn(r.stdout);
     wordPid = 0;
+    if (dead()) {
+      // (Stop: cancel() ended the child and the Word known then; one printed after it is ended here - and no part is kept)
+      if (pid && pid !== wordKilled) killPid(pid);
+      rm(part);
+      return cancelledAnswer;
+    }
     if (r.timedOut) {
       // (only the Word this run started - its process id was printed before the file was opened)
       if (pid) killPid(pid);
@@ -195,7 +206,7 @@ function makeConverter(d = {}) {
     const missing = /CLSID|COM class|80040154|not registered|Retrieving the COM/i.test(r.stderr || '');
     return { ok: false, missing, why: missing ? 'Microsoft Word is not installed' : wordWhy(r.stderr, r.code) };
   }
-  async function viaSoffice(exe, src, out) {
+  async function viaSoffice(exe, src, out, dead) {
     // (into a folder of its own - LibreOffice names its output itself - and moved to `out` only when it is whole)
     const work = path.join(root, 'w' + process.pid + '-' + path.basename(out, '.pdf'));
     rm(work, { recursive: true });
@@ -203,7 +214,13 @@ function makeConverter(d = {}) {
     try {
       // (a profile of its own: a LibreOffice the person has open is not touched, and none is waited for)
       const profile = path.join(root, 'lo-profile');
-      const r = await go(exe, ['--headless', '--norestore', '--nolockcheck', '--nodefault', '--nofirststartwizard', `-env:UserInstallation=${pathToFileURL(profile).href}`, '--convert-to', 'pdf', '--outdir', work, src]);
+      const args = ['--headless', '--norestore', '--nolockcheck', '--nodefault', '--nofirststartwizard', `-env:UserInstallation=${pathToFileURL(profile).href}`, '--convert-to', 'pdf', '--outdir', work, src];
+      // (tests only - e2e-docs: RR_TEST_CONVHOLD=<folder>; a file named `hold` there is taken away and that one conversion
+      //  starts 60 s late, so Stop can be pressed while it runs. Nothing is read when the variable is not set)
+      let hold = false;
+      if (env.RR_TEST_CONVHOLD && platform !== 'win32') { try { fs.unlinkSync(path.join(env.RR_TEST_CONVHOLD, 'hold')); hold = true; } catch (_) { /* no hold asked */ } }
+      const r = await (hold ? go('sh', ['-c', 'sleep 60; exec "$0" "$@"', exe, ...args]) : go(exe, args));
+      if (dead()) return cancelledAnswer; // (a run that ended whole is not kept either: the work folder goes below)
       const got = path.join(work, path.basename(src).replace(/\.docx$/i, '') + '.pdf');
       if (r.timedOut) return { ok: false, why: `LibreOffice did not finish in ${Math.round(timeoutMs / 1000)} s (stopped)` };
       if (r.code === 0 && made(got)) {
@@ -214,8 +231,10 @@ function makeConverter(d = {}) {
   }
 
   const closing = { ok: false, why: 'the app is closing' };
-  async function one(src) {
+  async function one(src, my) {
+    const dead = () => my !== gen;
     if (stopped) return closing;
+    if (dead()) return cancelledAnswer; // (Stop came while it waited its turn)
     if (!/\.docx$/i.test(src)) return { ok: false, why: 'not a .docx file' };
     if (off) return { ok: false, none: true, off: true, why: 'Word files are compared as their text in this version' };
     let st;
@@ -233,8 +252,9 @@ function makeConverter(d = {}) {
     let wordMissing = platform !== 'win32', loMissing = false;
     if (platform === 'win32' && wordOut) { wordMissing = wordOut === 'missing'; why.push(wordOut === 'missing' ? 'Microsoft Word is not installed' : 'Microsoft Word did not answer earlier - not asked again'); }
     else if (platform === 'win32') {
-      const r = await viaWord(src, out);
+      const r = await viaWord(src, out, dead);
       if (stopped) return closing; // (stop() ended it: no other converter is started while the app quits)
+      if (r.cancelled) return r; // (Stop: LibreOffice is not tried in its place, and Word is not marked stuck)
       if (r.ok) { keepBy(out, 'Word'); return { ok: true, pdf: out, by: 'Word' }; }
       wordMissing = !!r.missing; why.push(r.why);
       if (r.missing) wordOut = 'missing'; else if (/did not finish/.test(r.why)) wordOut = 'stuck';
@@ -242,8 +262,9 @@ function makeConverter(d = {}) {
     if (stopped) return closing;
     const exe = find(platform, env);
     if (exe) {
-      const r = await viaSoffice(exe, src, out);
+      const r = await viaSoffice(exe, src, out, dead);
       if (stopped) return closing;
+      if (r.cancelled) return r;
       if (r.ok) { keepBy(out, 'LibreOffice'); return { ok: true, pdf: out, by: 'LibreOffice' }; }
       why.push(r.why);
     } else { loMissing = true; if (platform === 'win32' && !wordMissing) why.push('LibreOffice was not found'); }
@@ -252,7 +273,21 @@ function makeConverter(d = {}) {
   }
   // (one at a time: Word and LibreOffice each take one file at a time)
   let queue = Promise.resolve();
-  const convert = (src) => { const p = queue.then(() => one(String(src))); queue = p.catch(() => { }); return p.catch((e) => ({ ok: false, why: short((e && e.message) || e) })); };
+  const convert = (src) => {
+    const my = gen; busy++;
+    const p = queue.then(() => one(String(src), my)); queue = p.catch(() => { });
+    return p.catch((e) => ({ ok: false, why: short((e && e.message) || e) })).finally(() => { busy--; });
+  };
+  /** at Stop (0.6.1 T34, DECISIONS 129): the running conversion's PowerShell / LibreOffice and the Word it started are ended
+   *  by the same ids as stop(); every conversion asked so far answers { ok: false, cancelled: true }, a later one runs. The
+   *  converter stays usable: Word is not marked stuck, LibreOffice is not tried in its place. Nothing running: nothing done */
+  const cancel = () => {
+    if (!busy) return;
+    gen++;
+    const c = child, w = wordPid; child = 0; wordKilled = w;
+    if (c) killPid(c);
+    if (w) killPid(w);
+  };
   /** at quit: the running PowerShell / LibreOffice and the Word it started are ended; nothing new is started */
   const stop = () => {
     stopped = true;
@@ -265,7 +300,7 @@ function makeConverter(d = {}) {
   const prune = (ms) => {
     try { for (const n of fs.readdirSync(root)) { if (n === 'lo-profile') continue; const f = path.join(root, n); if (Date.now() - fs.statSync(f).mtimeMs > ms) fs.rmSync(f, { recursive: true, force: true }); } } catch (_) { /* none */ }
   };
-  return { convert, clean, stop, prune, root };
+  return { convert, cancel, clean, stop, prune, root };
 }
 
 module.exports = { makeConverter, wordScript, encodePs, sofficeCandidates, findSoffice, cacheName, spawnRun, killTree };

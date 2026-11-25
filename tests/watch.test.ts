@@ -13,7 +13,8 @@ function rig() {
   const w0 = new EngineClient('Engine 1'), view = new EngineClient('View engine');
   w0.attach(fakePort(), false); view.attach(fakePort(), false);
   void w0.call('fingerprint').catch(() => {}); void view.call('view').catch(() => {});
-  const t0 = performance.now();
+  // (whole milliseconds: looks exactly 2 minutes apart must not read as a hair over 2 from a fractional clock - 0.6.1, flaked under load)
+  const t0 = Math.ceil(performance.now()); // (and not before the calls were sent)
   const got = { kills: [] as string[], notices: [] as string[], over: [] as string[] };
   const watch = new Watch({
     limits: () => ({ limit: 6 * MIN, viewLimit: 90_000 }),

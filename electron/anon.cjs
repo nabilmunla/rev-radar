@@ -19,16 +19,25 @@ function scrub(text, { user = '', pc = '', words = [] } = {}) {
   for (const w of known) s = s.split(w).join(/\.[a-z0-9]{2,5}$/i.test(w) ? '\u0001F\u0001' : '\u0001N\u0001');
   s = replaceNames(s, { user, pc });
   // 2. the app's own files: their place on this PC goes, the code location stays
-  s = s.replace(/\b[A-Za-z]:[\\/][^"'|*?\r\n]*?[\\/]resources[\\/]app(?:\.old)?[\\/]/gi, '<app>/');
+  //  (an apostrophe ends a path only where one opened it: 'C:\x\y.pdf' - DECISIONS 155)
+  s = s.replace(/'[A-Za-z]:[\\/](?:[^'\r\n]|'(?=[A-Za-z0-9]))*?[\\/]resources[\\/]app(?:\.old)?[\\/]/gi, "'<app>/");
+  s = s.replace(/(?<!')\b[A-Za-z]:[\\/][^"|*?\r\n]*?[\\/]resources[\\/]app(?:\.old)?[\\/]/gi, '<app>/');
   // (Linux: /opt/<app>/... from the .deb, /tmp/.mount_<id>/... while an AppImage runs)
-  s = s.replace(/(^|[\s"'(=])\/[^\s"'\r\n]*?\/resources\/app(?:\.old)?\//g, '$1<app>/');
+  s = s.replace(/(^|[\s"'(=])\/[^\s"\r\n]*?\/resources\/app(?:\.old)?\//g, '$1<app>/');
   // 3. every other path, to the end of the path: up to a quote, a bracket that closes the line,
   //    or the end of the line (spaces included - "C:\Users\John Smith\Bids\BOQ rev 3.pdf")
   s = s.replace(/file:\/\/\/?[^\s"'<>)]*/gi, '<path>');
   // (a name already taken out in 1 - "<name>" - can sit inside a path: the path goes on through it)
-  s = s.replace(/\b[A-Za-z]:[\\/][^"'|*?\r\n]*/g, '<path>');
-  s = s.replace(/\\\\[^"'|*?\r\n\\]+\\[^"'|*?\r\n]*/g, '<path>');
-  s = s.replace(/(^|[\s"'(=])\/(?:home|Users|tmp|mnt|media|run|srv|opt|root|var|private|Volumes|sessions)\/[^"'\r\n]*/g, '$1<path>');
+  //  a path that begins right after an apostrophe ends at the next one; any other runs to the end of
+  //  the line, a double quote or | * ? - an apostrophe inside it ("Contractor's Tower") does not end it
+  const DIRS = 'home|Users|tmp|mnt|media|run|srv|opt|root|var|private|Volumes|sessions';
+  // (T47 sweep C-2: an apostrophe followed by a letter or digit - "Bob's Tower" - is part of the name, not the closing quote)
+  s = s.replace(/'[A-Za-z]:[\\/](?:[^'\r\n]|'(?=[A-Za-z0-9]))*/g, "'<path>");
+  s = s.replace(/'\\\\[^'\r\n\\]+\\(?:[^'\r\n]|'(?=[A-Za-z0-9]))*/g, "'<path>");
+  s = s.replace(new RegExp(`'\\/(?:${DIRS})\\/(?:[^'\\r\\n]|'(?=[A-Za-z0-9]))*`, 'g'), "'<path>");
+  s = s.replace(/\b[A-Za-z]:[\\/][^"|*?\r\n]*/g, '<path>');
+  s = s.replace(/\\\\[^"|*?\r\n\\]+\\[^"|*?\r\n]*/g, '<path>');
+  s = s.replace(new RegExp(`(^|[\\s"(=])\\/(?:${DIRS})\\/[^"\\r\\n]*`, 'g'), '$1<path>');
   // 4. a file name on its own: in quotes whole; after the app's own words ("opened <name>.pdf: 3
   //    pages") whole; else back to the nearest character Windows doesn't allow in a name (a colon,
   //    a quote...) or the start of the line - names of 20 words and brackets ("...WIR-001641[0]_WIR

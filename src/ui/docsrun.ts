@@ -54,6 +54,8 @@ async function convertWord(oldSet: DocSet, newSet: DocSet, live: () => boolean, 
     note(`Turning the Word files into PDFs (${++k} of ${todo.length})…`);
     let r: Awaited<ReturnType<typeof rr.docxConvert>> | null = null;
     try { r = rr.docxConvert ? await rr.docxConvert(t.f.path) : null; } catch { r = null; }
+    // (0.6.1 T34: Stop cancelled it - nothing is said about the file, and no other is asked)
+    if (r && !r.ok && (r as { cancelled?: boolean }).cancelled) break;
     // (switched off - RR_OFF=docxpdf: Word files are read as text, as in 0.5.0 - nothing to say)
     if (r && !r.ok && (r as { off?: boolean }).off) { note(''); return { conv, lines: [] }; }
     const name = t.f.rel.split(/[\\/]/).pop() || t.f.rel;
@@ -134,6 +136,8 @@ export function stopDocs() {
   const s = ui.docs;
   if (!s || s.phase !== 'running') return;
   runId++;
+  // (0.6.1 T34: the Word / LibreOffice run in the main process ends too, and the converter stays usable)
+  try { void Promise.resolve(rr.docxCancel?.()).catch(() => { }); } catch { /* an old preload: the run ends on its own */ }
   if (ui.boq?.phase !== 'running') void stopOcr();
   void closeJobEngine('docs');
   kept.docs = { old: { paths: s.oldSet.paths, files: s.oldSet.files }, neu: { paths: s.newSet.paths, files: s.newSet.files } };
@@ -173,7 +177,13 @@ async function readPictures(c: EngineClient, s: DocSession, live: () => boolean)
 }
 export function leaveDocs() {
   flushTicks();
-  if (ui.docs?.phase === 'running') { runId++; if (ui.boq?.phase !== 'running') void stopOcr(); void closeJobEngine('docs'); }
+  if (ui.docs?.phase === 'running') {
+    runId++;
+    // (0.6.1 ritual: the Word / LibreOffice run ends too - the next compare must not wait behind it)
+    try { void Promise.resolve(rr.docxCancel?.()).catch(() => { }); } catch { /* an old preload */ }
+    if (ui.boq?.phase !== 'running') void stopOcr();
+    void closeJobEngine('docs');
+  }
   runId++; ui.docs = null; bump();
 }
 

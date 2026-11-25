@@ -25,16 +25,12 @@ function note(line) {
 const builtinVersion = (V.readJson(path.join(builtinDir, 'package.json')) || {}).version || '';
 // the setup ran since the last start: what it installed runs (see versions.setupRan)
 try { const r = V.setupRan(store, installDir, builtinVersion); if (r) note(r); } catch (e) { note('setup check: ' + (e && e.message || e)); }
-let pick = null;
-try { pick = V.choose(builtinDir, store, runtime); } catch (e) { note('choose: ' + (e && e.stack || e)); }
-// a store copy that failed to come up before is set aside here (and the next one is taken)
+// a store copy that failed to come up before is set aside here (and the next one is taken); one that
+// cannot be set aside and is offered again is not taken twice - the installed copy runs
+const started = V.pickStart(() => V.choose(builtinDir, store, runtime), V.beginStart, note);
+let pick = started.pick;
 let undo = null;
-while (pick && !pick.builtin) {
-  const dir = pick.dir, before = V.readJson(path.join(dir, 'starts.json'));
-  if (V.beginStart(dir)) { undo = () => V.undoStart(dir, before); break; }
-  note('set aside ' + pick.version + ' (its window did not come up)');
-  pick = V.choose(builtinDir, store, runtime);
-}
+if (pick && !pick.builtin) { const dir = pick.dir, before = started.before; undo = () => V.undoStart(dir, before); }
 if (!pick) pick = { version: builtinVersion, dir: builtinDir, builtin: true };
 
 global.__rrBoot = {
